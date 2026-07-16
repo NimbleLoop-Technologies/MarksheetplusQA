@@ -35,8 +35,8 @@ These are not code tasks. They block specific tasks below and must be resolved b
 | `pages/register.page.ts` | Registration screen. |
 | `pages/students.page.ts` | Students list screen. |
 | `pages/student-profile.page.ts` | Single student profile screen. |
-| `tests/auth/*.spec.ts` | Auth behaviour. Runs anonymous (no stored state). |
-| `tests/students/*.spec.ts` | Students behaviour. Runs authenticated. |
+| `tests/anonymous/*.spec.ts` | Specs that must run logged **out** (login, register). Project `anonymous`. |
+| `tests/authenticated/<module>/*.spec.ts` | Specs that need a logged-in user. Project `authenticated`. |
 | `docs/qa/ui-reference.md` | Recon output: real routes + selectors observed on the live app. |
 | `.claude/skills/*/SKILL.md` | Four QA procedures. |
 | `.claude/agents/*.md` | Three QA agents. |
@@ -45,6 +45,25 @@ These are not code tasks. They block specific tasks below and must be resolved b
 | `README.md` | How to run everything. |
 
 **Boundary rule enforced throughout:** specs never contain selectors; page objects never contain assertions about business outcomes beyond their own screen; fixtures never import page objects except `auth.setup.ts` and `register.ts`, which legitimately drive UI.
+
+### Test directory structure — why it is shaped this way
+
+Each project's `testDir` maps 1:1 onto a directory, and **no `testIgnore` is used anywhere**:
+
+| Project | `testDir` | Stored state |
+|---|---|---|
+| `setup` | `./fixtures` | writes `.auth/user.json` |
+| `anonymous` | `./tests/anonymous` | none |
+| `authenticated` | `./tests/authenticated` | `.auth/user.json` |
+
+An earlier draft used `testDir: './tests'` + `testIgnore: /auth[\\/]/` for the authenticated project. That was a silent-failure trap and was removed. Playwright matches `testIgnore` against the **absolute** path, and the regex was unanchored, so:
+- `tests/oauth/` would have been silently excluded (`oauth/` contains `auth/`).
+- A future `tests/students/auth/permissions.spec.ts` would have matched no project at all — running in **zero** projects, silently, forever.
+- Checking the repo out under any directory named `auth` would have excluded the entire authenticated suite.
+
+Directory-per-project removes the whole class of bug: the project name and the directory name are the same word, so where a spec runs is obvious from its path. **A test that silently never runs is worse than a failing test — it reports green while proving nothing.**
+
+**Rule for new specs:** a spec goes in `tests/anonymous/` only if it must run logged out. Everything else goes in `tests/authenticated/<module>/`. Never place a `.spec.ts` directly in `tests/` — it would belong to no project and never run.
 
 ---
 
@@ -176,7 +195,9 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 1,
-  workers: process.env.CI ? 2 : undefined,
+  // Capped even locally: this suite runs against a SHARED live environment using a
+  // single seeded account. Uncapped local workers would hammer it harder than CI.
+  workers: process.env.CI ? 2 : 4,
   reporter: [
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
     ['json', { outputFile: 'test-results/results.json' }],
@@ -195,17 +216,18 @@ export default defineConfig({
       name: 'setup',
       testDir: './fixtures',
       testMatch: /.*\.setup\.ts/,
+      // No retries: a failed login is a hard stop. Retrying risks account lockout.
+      retries: 0,
       use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'anonymous',
-      testDir: './tests/auth',
+      testDir: './tests/anonymous',
       use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'authenticated',
-      testDir: './tests',
-      testIgnore: /auth[\\/]/,
+      testDir: './tests/authenticated',
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
@@ -216,14 +238,18 @@ export default defineConfig({
 });
 ```
 
-Why three projects: `setup` logs in once. `authenticated` reuses that state and skips `tests/auth`. `anonymous` runs `tests/auth` with **no** stored state and **no** setup dependency — a login test that starts logged in proves nothing.
+Why three projects: `setup` logs in once. `authenticated` reuses that state. `anonymous` runs the logged-out specs with **no** stored state and **no** setup dependency — a login test that starts logged in proves nothing.
 
-The `json` reporter is not decoration: `run-and-triage` (Task 9) parses `test-results/results.json`.
+**No `testIgnore` anywhere.** Each project owns one directory. See "Test directory structure" above for why: `testIgnore` matches absolute paths, and any regex there is a silent-skip trap.
+
+The `json` reporter is not decoration: `run-and-triage` (Task 9) parses `test-results/results.json`. `retries: 1` is what produces the per-attempt `results[]` array that skill uses to tell a flake from a real failure.
+
+**Security note — traces contain the password.** `trace: 'on-first-retry'` records full network activity including request bodies, so a retried login writes `QA_PASSWORD` in plaintext into `trace.zip`. Artifacts are gitignored, so this is safe locally. The real risk is exfiltration by attachment: **never attach a raw trace to a ClickUp ticket.** Screenshots are safe (password inputs render as dots). This constraint is enforced in the `report-to-clickup` skill (Task 9).
 
 - [ ] **Step 3: Verify the config parses**
 
 Run: `npx playwright test --list`
-Expected: exits cleanly reporting `Total: 0 tests in 0 files`. Any config syntax/type error surfaces here.
+Expected: `Total: 0 tests in 0 files`, **exit code 1** with `Error: No tests found`. That non-zero exit is normal Playwright behaviour when no spec files exist yet — not a config error. What matters is that no syntax/type error and no "testDir not found" error appears. This resolves once Task 5 lands the first spec.
 
 - [ ] **Step 4: Commit**
 
@@ -409,7 +435,7 @@ git commit -m "feat: add login page object and seeded-account auth setup"
 ### Task 5: Auth regression specs
 
 **Files:**
-- Create: `tests/auth/login.spec.ts`
+- Create: `tests/anonymous/login.spec.ts`
 
 **Depends on:** Task 4.
 
@@ -455,7 +481,7 @@ If "valid credentials" passes but a rejection test fails, the app likely does no
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tests/auth/login.spec.ts
+git add tests/anonymous/login.spec.ts
 git commit -m "test: add login regression specs"
 ```
 
@@ -467,7 +493,7 @@ git commit -m "test: add login regression specs"
 - Create: `fixtures/test-data.ts`
 - Create: `pages/register.page.ts`
 - Create: `fixtures/register.ts`
-- Create: `tests/auth/register.spec.ts`
+- Create: `tests/anonymous/register.spec.ts`
 
 **Depends on:** Task 3 recon of the register surface.
 
@@ -579,7 +605,7 @@ test.describe('Registration', () => {
 
 - [ ] **Step 5: Run it**
 
-Run: `npx playwright test tests/auth/register.spec.ts --project=anonymous`
+Run: `npx playwright test tests/anonymous/register.spec.ts --project=anonymous`
 Expected: PASS.
 
 If registration requires email confirmation before landing, `expectRegistered()` is wrong. Change it to assert the actual observed post-submit state (e.g. a "check your inbox" message) — per recon, not per guess.
@@ -587,7 +613,7 @@ If registration requires email confirmation before landing, `expectRegistered()`
 - [ ] **Step 6: Commit**
 
 ```bash
-git add fixtures/test-data.ts fixtures/register.ts pages/register.page.ts tests/auth/register.spec.ts
+git add fixtures/test-data.ts fixtures/register.ts pages/register.page.ts tests/anonymous/register.spec.ts
 git commit -m "feat: add registration page object, helper, and spec"
 ```
 
@@ -598,7 +624,7 @@ git commit -m "feat: add registration page object, helper, and spec"
 **Files:**
 - Create: `pages/students.page.ts`
 - Create: `pages/student-profile.page.ts`
-- Create: `tests/students/students-list.spec.ts`
+- Create: `tests/authenticated/students/students-list.spec.ts`
 
 **Depends on:** Task 3 recon of the students surface, Task 4 auth state.
 
@@ -696,7 +722,7 @@ Expected: PASS. The `setup` project runs first and supplies auth state.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add pages/students.page.ts pages/student-profile.page.ts tests/students/students-list.spec.ts
+git add pages/students.page.ts pages/student-profile.page.ts tests/authenticated/students/students-list.spec.ts
 git commit -m "test: add students list page objects and regression specs"
 ```
 
@@ -858,8 +884,9 @@ Never select on Bootstrap/Metronic utility classes. They change with styling and
 ## Structure
 
 - One behaviour per test. The test name states the behaviour: *"login is rejected with an invalid password"*, not *"test login 2"*.
-- Auth-related specs go in `tests/auth/` (project `anonymous`, no stored state).
-- Everything else goes in `tests/<module>/` (project `authenticated`).
+- Specs that must run logged **out** go in `tests/anonymous/` (project `anonymous`, no stored state).
+- Everything else goes in `tests/authenticated/<module>/` (project `authenticated`, reuses stored state).
+- **Never** put a `.spec.ts` directly in `tests/`. It would belong to no project and would silently never run.
 
 ## Waiting
 
@@ -889,7 +916,7 @@ description: Run the Marksheet+ Playwright suite and triage the results — sepa
 - Whole suite: `npm test`
 - Auth only (anonymous): `npm run test:auth`
 - Authenticated regression: `npm run test:regression`
-- One file: `npx playwright test tests/students/students-list.spec.ts`
+- One file: `npx playwright test tests/authenticated/students/students-list.spec.ts`
 - Debug visually: `npm run test:headed` or `npm run test:ui`
 
 Machine-readable results land in `test-results/results.json`. Parse that rather than scraping stdout.
@@ -972,7 +999,7 @@ description: Report QA results back to a ClickUp task — pass/fail summary, bug
 > 2. <exact step>
 >
 > **Environment:** qa-integration.marksheetplus.com · Chromium
-> **Evidence:** <screenshot / trace path>
+> **Evidence:** <screenshot>
 > **Failing test:** `tests/<path>:<test name>` (if automated)
 >
 > _Automated QA via Claude Code._
@@ -983,7 +1010,15 @@ description: Report QA results back to a ClickUp task — pass/fail summary, bug
 - Repro steps must be exact enough for a developer to follow without asking a question. "Log in and it breaks" is not a repro.
 - Never report a flake as a failure, or a retry-pass as a pass. Say "flaky" and mean it.
 - If ClickUp is unavailable, still surface the full result to the user locally. A reporting outage must never discard a run.
-- Attach evidence for every failure. A failure without a screenshot or trace gets bounced back.
+- Attach evidence for every failure. A failure without a screenshot gets bounced back.
+
+## NEVER attach a Playwright trace to ClickUp
+
+`trace: 'on-first-retry'` records full network activity **including request bodies**. A retried login writes the seeded account's `QA_PASSWORD` into `trace.zip` in plaintext. Traces are gitignored and safe on disk — uploading one to a ticket publishes the QA password to everyone with board access.
+
+- **Screenshots: safe to attach.** Password inputs render as dots.
+- **Videos: safe by default**, but check the frames if the flow involves a show-password toggle.
+- **`trace.zip`: never attach.** Reference it by local path (`test-results/<dir>/trace.zip`) so a developer can open it themselves with `npx playwright show-trace`.
 ```
 
 - [ ] **Step 5: Commit**
@@ -1281,4 +1316,4 @@ Gap found and closed during review: the spec assumed page objects could be writt
 
 **Placeholder scan:** The only `<placeholder>` markers are inside the Task 3 template, where filling them in *is* the task — and the step states that leaving one is a defect. No TBDs elsewhere.
 
-**Type consistency:** `NewAccount` is defined in `pages/register.page.ts` (Task 6, Step 2) and imported by `fixtures/register.ts` (Step 3) and used in `tests/auth/register.spec.ts` (Step 4). `LoginPage` methods (`goto`, `login`, `expectLoggedIn`, `expectLoginRejected`) defined in Task 4 match every call site in Tasks 4–5. `StudentsPage` methods (`goto`, `expectLoaded`, `search`, `openStudent`, `studentCount`) defined in Task 7 match their spec call sites. `uniqueEmail` / `uniqueName` defined in Task 6 Step 1 match usage in Step 3. Consistent.
+**Type consistency:** `NewAccount` is defined in `pages/register.page.ts` (Task 6, Step 2) and imported by `fixtures/register.ts` (Step 3) and used in `tests/anonymous/register.spec.ts` (Step 4). `LoginPage` methods (`goto`, `login`, `expectLoggedIn`, `expectLoginRejected`) defined in Task 4 match every call site in Tasks 4–5. `StudentsPage` methods (`goto`, `expectLoaded`, `search`, `openStudent`, `studentCount`) defined in Task 7 match their spec call sites. `uniqueEmail` / `uniqueName` defined in Task 6 Step 1 match usage in Step 3. Consistent.
