@@ -11,7 +11,9 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 1,
-  workers: process.env.CI ? 2 : undefined,
+  // Capped even locally: this suite runs against a SHARED live environment using a
+  // single seeded account. Uncapped local workers would hammer it harder than CI.
+  workers: process.env.CI ? 2 : 4,
   reporter: [
     ['html', { outputFolder: 'playwright-report', open: 'never' }],
     ['json', { outputFile: 'test-results/results.json' }],
@@ -30,17 +32,18 @@ export default defineConfig({
       name: 'setup',
       testDir: './fixtures',
       testMatch: /.*\.setup\.ts/,
+      // No retries: a failed login is a hard stop. Retrying risks account lockout.
+      retries: 0,
       use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'anonymous',
-      testDir: './tests/auth',
+      testDir: './tests/anonymous',
       use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'authenticated',
-      testDir: './tests',
-      testIgnore: /auth[\\/]/,
+      testDir: './tests/authenticated',
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
