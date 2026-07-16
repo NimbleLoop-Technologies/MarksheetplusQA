@@ -755,7 +755,6 @@ git commit -m "test: add students list page objects and regression specs"
 {
   "permissions": {
     "allow": [
-      "Bash(npm install)",
       "Bash(npm test:*)",
       "Bash(npm run test:*)",
       "Bash(npm run typecheck)",
@@ -783,6 +782,10 @@ git commit -m "test: add students list page objects and regression specs"
 **Why `git add` / `git commit` are NOT allowlisted.** This is deliberate and load-bearing. Agents here consume untrusted input by design: ClickUp ticket text written by other people, and live web content read through Playwright MCP. `Bash(git add:*)` + `Bash(git commit:*)` together permit `git add -f .env` — force-add bypasses `.gitignore` — followed by an unprompted commit. That is a one-step path from a prompt injection to the live QA password sitting in git history. Commits prompting is a small cost; publishing credentials is not recoverable. **Do not add these back for convenience.**
 
 **The `deny` list is defense in depth.** No agent ever needs to *read* `.env` or `.auth/` — only the Playwright process does, at runtime, which `deny` does not affect. Denying the read closes the exfiltration path even if a command slips through the allowlist. Note `Read(./.env)` is exact, not a glob, so `.env.example` stays readable.
+
+**Why `npm install` is NOT allowlisted.** `npm install` executes `preinstall`/`postinstall` lifecycle scripts from every dependency with full Node `fs` and network access. That is a *subprocess*, so `Read(./.env)` does not constrain it at all — a postinstall script can `fs.readFileSync('.env')` and POST it out with no shell trickery. The realistic chain is: injection → agent edits `package.json` to add a malicious dependency → `npm install` runs unprompted → credentials gone. Removing the grant breaks the last link for the cost of one prompt on a command that runs about once per clone. Cheap insurance; leave it out.
+
+**Known platform limitation — the allowlist is not a sandbox.** These rules are prefix matches, and Claude Code's Bash matcher has historically regressed on chained commands (`&&`, `;`, `|`), where only the first segment needed to match. Current versions check each subcommand independently. Keep Claude Code updated, and do not treat this allowlist as a hard security boundary — it reduces prompt fatigue on safe commands; it is not a jail.
 
 Do **not** add `enabledPlugins` for ClickUp here — the plugin/marketplace identifier is unverified, and a wrong key silently does nothing. ClickUp enablement is the user's interactive step (see Prerequisites).
 
