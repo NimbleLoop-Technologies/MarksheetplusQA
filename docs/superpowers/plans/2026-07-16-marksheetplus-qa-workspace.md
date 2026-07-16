@@ -741,11 +741,13 @@ git commit -m "test: add students list page objects and regression specs"
   "mcpServers": {
     "playwright": {
       "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest"]
+      "args": ["-y", "@playwright/mcp@0.0.78"]
     }
   }
 }
 ```
+
+**Pin the version — do not use `@latest`.** `@playwright/mcp` is a 0.x package where breaking changes can land in any release, and `-y` auto-installs whatever it resolves to with no confirmation. A repo whose purpose is reproducible QA results cannot have its browser-driving tool silently change between sessions. `@playwright/test` is pinned in `package.json`; this must be too. Bump it deliberately.
 
 - [ ] **Step 2: Create `.claude/settings.json`**
 
@@ -754,25 +756,37 @@ git commit -m "test: add students list page objects and regression specs"
   "permissions": {
     "allow": [
       "Bash(npm install)",
+      "Bash(npm test:*)",
       "Bash(npm run test:*)",
       "Bash(npm run typecheck)",
+      "Bash(npm run report:*)",
       "Bash(npx playwright test:*)",
       "Bash(npx playwright install:*)",
       "Bash(npx playwright show-report:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
-      "Bash(git log:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git log:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.auth/**)",
+      "Bash(git add -f:*)",
+      "Bash(git add --force:*)"
     ]
   },
   "enableAllProjectMcpServers": true
 }
 ```
 
-`enableAllProjectMcpServers` picks up the Playwright server from `.mcp.json` without a prompt per session.
+**Why `npm test:*` AND `npm run test:*`.** These rules are prefix matches. `npm test` does **not** start with `npm run test`, so without the first entry the most-used command in the repo — the one `/qa-regression` issues — prompts every single time.
+
+**Why `git add` / `git commit` are NOT allowlisted.** This is deliberate and load-bearing. Agents here consume untrusted input by design: ClickUp ticket text written by other people, and live web content read through Playwright MCP. `Bash(git add:*)` + `Bash(git commit:*)` together permit `git add -f .env` — force-add bypasses `.gitignore` — followed by an unprompted commit. That is a one-step path from a prompt injection to the live QA password sitting in git history. Commits prompting is a small cost; publishing credentials is not recoverable. **Do not add these back for convenience.**
+
+**The `deny` list is defense in depth.** No agent ever needs to *read* `.env` or `.auth/` — only the Playwright process does, at runtime, which `deny` does not affect. Denying the read closes the exfiltration path even if a command slips through the allowlist. Note `Read(./.env)` is exact, not a glob, so `.env.example` stays readable.
 
 Do **not** add `enabledPlugins` for ClickUp here — the plugin/marketplace identifier is unverified, and a wrong key silently does nothing. ClickUp enablement is the user's interactive step (see Prerequisites).
+
+**Accepted risk — `enableAllProjectMcpServers: true`.** This grants standing trust to whatever `.mcp.json` contains at session start, not just today's reviewed `playwright` entry. The trust boundary becomes "can edit `.mcp.json`" rather than "a human approved this server". Accepted because `.mcp.json` is version-controlled and reviewed like any other file, and the alternative is a prompt every session. Revisit if this repo ever takes third-party PRs.
 
 - [ ] **Step 3: Verify Playwright MCP resolves**
 
