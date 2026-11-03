@@ -13,6 +13,12 @@ description: Run the Marksheet+ Playwright suite and triage the results — sepa
 - One file: `npx playwright test tests/authenticated/students/students-list.spec.ts`
 - Debug visually: `npm run test:headed` or `npm run test:ui`
 
+**Which one to run.** Default to the narrowest scope that covers the acceptance criteria:
+- QA'ing a specific ClickUp task → run only the spec(s) covering that task's criteria. Fast feedback, less load on the shared environment.
+- Asked for "the regression suite" or a pre-merge check → `npm test`.
+- Verifying a login/registration change → `npm run test:auth`.
+- Unsure → `npm test`. Over-running is wasteful; under-running reports green on untested code, which is worse.
+
 Machine-readable results land in `test-results/results.json`. Parse that rather than scraping stdout.
 
 ## Triage — classify every failure
