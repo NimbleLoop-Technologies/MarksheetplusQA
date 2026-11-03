@@ -10,7 +10,8 @@
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
     "report": "playwright show-report",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:critical": "playwright test --grep @critical"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

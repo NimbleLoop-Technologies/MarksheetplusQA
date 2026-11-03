@@ -436,3 +436,9 @@ playwright-report/
 test-results/
 blob-report/
 playwright/.cache/
+
+# Playwright MCP output (snapshots, screenshots, console logs)
+.playwright-mcp/
+
+# Per-task QA output: test plans, results, bug write-ups, screenshots
+.qa/
