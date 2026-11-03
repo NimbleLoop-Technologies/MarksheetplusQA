@@ -1,0 +1,19 @@
+# Glossary
+- **Campus / Tenant** — a school branch; tenant claim in JWT. Multi-campus users switch via SwitchCampus.
+- **Persona** — Family | Campus | Accounts token type.
+- **Registrar Office** — admissions/students; **Classrooms** — classes/sections; **Account Office** — fees & payroll; **Staff Room**; **Examination Center**.
+- **Session / Term** — academic year and its exam terms (PassingCriteria).
+- **Datesheet** — exam schedule per term; **Marksheet** — marks per class/subject; **Mastersheet** — consolidated published result.
+- **SPI** — Student Performance Index 0–100.
+- **Challan** — fee voucher/bill issued to a family; **Additional fund** — extra fee head; **Fee policy** — class fee structure (Draft/Published/Archived).
+- **Carried/Brought forward** — unpaid balance moved to next challan.
+- **Ledger** — double-entry journal fed via outbox.
+- **Kit** — bundle of bookshop items; **POS day** — open/close cash session.
+- **Learner / LearnerEnrollment / Guardianship** — learner-plane identity, school enrollment, and household link (ADR 0005).
+- **Provisional / Unclaimed** — learner/enrollment before a parent accepts an invite.
+- **Invite code** — 6-char family link code (PR #550).
+- **Projection** — read-only family-plane copy built by Worker.
+- **Outbox** — durable event rows relayed to RabbitMQ.
+- **Quota / WhatsAppUtility** — metered WhatsApp messages per campus per month.
+- **Struck off / Readmission** — student leaves / rejoins.
+- **MIG-F*/MIG-R*** — Tailwind UI migration feature/review tickets.
