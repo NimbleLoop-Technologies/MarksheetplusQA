@@ -21,7 +21,7 @@ const MONGO_URL = process.env.QA_MONGO_URL ?? 'mongodb://localhost:27017/mp-acco
 /** The seeded parent account's number. Students seeded with it land in that parent's lobby. */
 export const DEFAULT_PARENT_PHONE = process.env.QA_PARENT_PHONE ?? '03000000003';
 
-const ADMISSION_PREFIX = process.env.QA_ADMISSION_PREFIX ?? 'C2-';
+const ADMISSION_PREFIX = process.env.QA_ADMISSION_PREFIX ?? 'C3-';
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
 const randomLetters = (n: number) => Array.from({ length: n }, () => LETTERS[randomInt(LETTERS.length)]).join('');
 const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -131,6 +131,19 @@ export async function inviteWhatsAppsFor(code: string): Promise<InviteWhatsApp[]
   return sends;
 }
 
+/** Every family_invite_code_en send logged for the child with this (unique) first name, oldest first. */
+export async function inviteWhatsAppsForChild(firstName: string): Promise<InviteWhatsApp[]> {
+  const log = await readFile(WORKER_LOG, 'utf8');
+  const sends: InviteWhatsApp[] = [];
+  for (const line of log.split('\n')) {
+    const m = TEMPLATE_LINE.exec(line);
+    if (!m) continue;
+    const body = m[3].split(' | ');
+    if (body[2] === firstName) sends.push({ to: m[1], header: m[2], body, button: m[4] });
+  }
+  return sends;
+}
+
 /**
  * Waits until the worker has sent the invite WhatsApp for `code` at least `count` times.
  * The relay projects the invite to the family plane BEFORE it sends, so once this resolves the
@@ -214,7 +227,8 @@ export interface FreshParent {
 export async function createFamilyParent(): Promise<FreshParent> {
   const phone = uniquePakistaniMobile();
   const suffix = randomLetters(8);
-  const email = `c2-${suffix}@testenv.local`;
+  // c3-…@testenv.local in cycle 3: the email prefix follows the admission-id prefix of the run.
+  const email = `${ADMISSION_PREFIX.replace(/-$/, '').toLowerCase()}-${suffix}@testenv.local`;
   const password = `Qa-${suffix}-Pw1!`;
   let stdout: string;
   try {

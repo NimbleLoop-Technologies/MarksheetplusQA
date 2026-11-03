@@ -53,7 +53,7 @@ export class JoinWithCodePage {
    * (the page drops it) and an earlier identical error message makes the assertion pass too early.
    * A blank code never reaches the server, so there is nothing to wait for.
    */
-  async submitCode(code: string) {
+  async submitCode(code: string): Promise<number | undefined> {
     await this.codeInput.fill(code);
     if (code.trim() === '') {
       await this.continueButton.click();
@@ -61,7 +61,7 @@ export class JoinWithCodePage {
     }
     const answered = this.page.waitForResponse((r) => r.url().includes('/family/link-invites/redeem') && r.request().method() === 'POST');
     await this.continueButton.click();
-    await answered;
+    return (await answered).status();
   }
 
   /** Value next to a label on the invite card: "Child", "Class", "Admission number", "Code expires". */

@@ -262,7 +262,9 @@ test.describe('Join with an invite code', () => {
     await expect(join.cardValue('Child')).toHaveText(student.firstName);
   });
 
-  test('Connect from a card opened before the school regenerated the code is refused', async ({ page, adminPage, student }) => {
+  // Accepted as-is by product (Umair, 3 Nov 2026, cycle 2 Q2): the addressee can still connect from a card opened
+  // before a regenerate. Kept as fixme so it can be re-enabled if that decision changes.
+  test.fixme('Connect from a card opened before the school regenerated the code is refused', async ({ page, adminPage, student }) => {
     const { code: oldCode, drawer } = await issueCode(adminPage, student);
     const join = new JoinWithCodePage(page);
     await join.goto(bare(oldCode));
@@ -270,9 +272,13 @@ test.describe('Join with an invite code', () => {
 
     const newCode = await drawer.regenerate(oldCode);
     await waitForInviteWhatsApp(newCode);
+    const accept = page.waitForResponse((r) => /\/link-invites\/[^/]+\/accept$/.test(r.url()) && r.request().method() === 'POST');
     await join.connect();
 
     // The registrar was told "The old code no longer works", so the stale card must not connect.
+    // Asserted on the accept answer itself: a just-linked child shows as "Child" on the dashboard until
+    // its snapshot is projected, so the dashboard check alone passed falsely once (cycle 3).
+    expect((await accept).status(), 'accept from a stale card').not.toBe(200);
     await expect(page).toHaveURL(/\/join/);
     const dashboard = new FamilyDashboardPage(page);
     await dashboard.goto();

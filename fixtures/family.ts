@@ -19,6 +19,8 @@ const ignoreHTTPSErrors = (process.env.QA_IGNORE_HTTPS_ERRORS ?? 'false').toLowe
 type FamilyFixtures = {
   student: SeededStudent;
   adminPage: Page;
+  /** A second, independent admin browser context (two registrars at once). */
+  adminPage2: Page;
   anonContext: BrowserContext;
 };
 
@@ -51,6 +53,13 @@ export const test = base.extend<FamilyFixtures, FamilyWorkerFixtures>({
   },
 
   adminPage: async ({ browser }, use) => {
+    const context = await browser.newContext({ storageState: ADMIN_STATE, baseURL: process.env.QA_BASE_URL, ignoreHTTPSErrors });
+    const page = await context.newPage();
+    await use(page);
+    await context.close();
+  },
+
+  adminPage2: async ({ browser }, use) => {
     const context = await browser.newContext({ storageState: ADMIN_STATE, baseURL: process.env.QA_BASE_URL, ignoreHTTPSErrors });
     const page = await context.newPage();
     await use(page);
