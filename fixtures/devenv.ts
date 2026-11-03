@@ -21,6 +21,7 @@ const MONGO_URL = process.env.QA_MONGO_URL ?? 'mongodb://localhost:27017/mp-acco
 /** The seeded parent account's number. Students seeded with it land in that parent's lobby. */
 export const DEFAULT_PARENT_PHONE = process.env.QA_PARENT_PHONE ?? '03000000003';
 
+const ADMISSION_PREFIX = process.env.QA_ADMISSION_PREFIX ?? 'C2-';
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
 const randomLetters = (n: number) => Array.from({ length: n }, () => LETTERS[randomInt(LETTERS.length)]).join('');
 const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -54,8 +55,9 @@ export async function seedStudent(options: SeedOptions = {}): Promise<SeededStud
   const fullName = `${titleCase(firstName)} ${titleCase(lastName)}`;
   const dateOfBirth = options.dateOfBirth ?? `2016-0${randomInt(1, 10)}-1${randomInt(0, 10)}`;
   const parentPhone = options.parentPhone ?? DEFAULT_PARENT_PHONE;
-  // <= 10 chars, [A-Za-z0-9-] (QuickAddStudent validation).
-  const admissionId = `QT-${Array.from({ length: 6 }, () => 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[randomInt(31)]).join('')}`;
+  // <= 10 chars, [A-Za-z0-9-] (QuickAddStudent validation). The prefix marks the QA run that created
+  // the student on the shared stack (override with QA_ADMISSION_PREFIX).
+  const admissionId = `${ADMISSION_PREFIX}${Array.from({ length: 10 - ADMISSION_PREFIX.length }, () => 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'[randomInt(31)]).join('')}`;
 
   const seedOnce = () =>
     run('bash', [SEED_SCRIPT], {
@@ -93,8 +95,16 @@ export async function seedStudent(options: SeedOptions = {}): Promise<SeededStud
   return { id, admissionId, firstName: titleCase(firstName), fullName, dateOfBirth, parentPhone };
 }
 
-/** A unique Pakistani mobile in 03xx format, for registering throwaway parents. */
-export const uniquePakistaniMobile = () => `0345${String(randomInt(0, 10_000_000)).padStart(7, '0')}`;
+/**
+ * A unique Pakistani mobile (0300 + 7 random digits), for registering throwaway parents.
+ * Never the seeded parent's 03000000003, whose family is shared by other runs.
+ */
+export function uniquePakistaniMobile(): string {
+  for (;;) {
+    const phone = `0300${String(randomInt(0, 10_000_000)).padStart(7, '0')}`;
+    if (phone !== DEFAULT_PARENT_PHONE) return phone;
+  }
+}
 
 // ── WhatsApp fake sender log ──────────────────────────────────────────────────────────────────
 
@@ -182,4 +192,107 @@ export async function expireInvite(studentId: string): Promise<string> {
     })
     .toBeGreaterThan(inviteId === pendingId ? before : 0);
   return inviteId;
+}
+
+// ── Fresh family parents (AC5–AC7 need a family nobody else touches) ─────────────────────────
+
+const PARENT_SCRIPT = process.env.QA_PARENT_SCRIPT ?? '/workspace/devenv/parent.sh';
+const REST_API = process.env.QA_REST_API_URL ?? 'https://localhost:7244';
+
+export interface FreshParent {
+  phone: string;
+  email: string;
+  password: string;
+  /** Family-plane bearer token. Never log it. */
+  readonly token: string;
+}
+
+/**
+ * Registers a brand-new parent (fixed OTP) and completes the family setup with no children, via the
+ * devenv parent script. The script prints the parent's API token on stdout; it is kept in memory only.
+ */
+export async function createFamilyParent(): Promise<FreshParent> {
+  const phone = uniquePakistaniMobile();
+  const suffix = randomLetters(8);
+  const email = `c2-${suffix}@testenv.local`;
+  const password = `Qa-${suffix}-Pw1!`;
+  let stdout: string;
+  try {
+    ({ stdout } = await run('bash', [PARENT_SCRIPT], {
+      env: {
+        ...process.env,
+        PARENT_PHONE: phone,
+        PARENT_EMAIL: email,
+        PARENT_PASSWORD: password,
+        PARENT_FIRST_NAME: 'Qaparent',
+        PARENT_LAST_NAME: titleCase(randomLetters(6)),
+        FAMILY_FATHER_NAME: `Qafather ${titleCase(randomLetters(6))}`,
+        // CNIC is unique per family: derive it from the phone.
+        FAMILY_CNIC: `35202-${phone.slice(4, 11)}-1`,
+      },
+      timeout: 180_000,
+      maxBuffer: 4 * 1024 * 1024,
+    }));
+  } catch (error) {
+    const { stderr, message } = error as { stderr?: string; message: string };
+    throw new Error(`parent.sh failed for ${phone}: ${stderr?.split('\n').filter((l) => l.includes('FAILED')).join(' ') || message.split('\n')[0]}`);
+  }
+  const token = /^export PARENT_TOKEN='(.+)'$/m.exec(stdout)?.[1];
+  if (!token) throw new Error(`parent.sh printed no PARENT_TOKEN for ${phone}`);
+  return { phone, email, password, token };
+}
+
+/** Calls the RestApi as the parent. The bearer header goes to curl on stdin, never on the command line. */
+async function parentApi(parent: FreshParent, method: string, route: string, body?: unknown): Promise<{ status: number; body: string }> {
+  const config = [`header = "Authorization: Bearer ${parent.token}"`].join('\n');
+  const args = ['-sk', '-K', '-', '-X', method, `${REST_API}${route}`, '-H', 'Accept: application/json', '-w', '\n%{http_code}'];
+  if (body !== undefined) args.push('-H', 'Content-Type: application/json', '--data', JSON.stringify(body));
+  const out = await new Promise<string>((resolve, reject) => {
+    const child = execFile('curl', args, { timeout: 60_000, maxBuffer: 4 * 1024 * 1024 }, (err, so) => (err ? reject(err) : resolve(so)));
+    child.stdin?.end(config);
+  });
+  const i = out.lastIndexOf('\n');
+  return { status: Number(out.slice(i + 1)), body: out.slice(0, i) };
+}
+
+export interface OwnChild {
+  id: string;
+  name: string;
+  dateOfBirth: string;
+}
+
+/**
+ * Adds a child the parent created themselves (Origin FamilyCreated), as the family app's profile
+ * endpoint does. There is no UI for this in the family app yet, so the API is the only way in.
+ */
+export async function addOwnChild(parent: FreshParent, name: string, dateOfBirth: string, gender: 'Male' | 'Female' = 'Male'): Promise<OwnChild> {
+  const res = await parentApi(parent, 'POST', '/family/setup/profile/children', {
+    studentName: name, bayFormOrCnic: null, whatsApp: null, email: null, dateOfBirth, gender, bloodGroup: null, studentImageUrl: null,
+  });
+  if (res.status !== 200) throw new Error(`adding child ${name} failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
+  const children = await ownChildren(parent);
+  const child = children.find((c) => c.name.toLowerCase() === name.toLowerCase());
+  if (!child) throw new Error(`child ${name} not listed after adding it`);
+  return child;
+}
+
+/** The family's children as the family plane lists them (GET /family/setup/profile). */
+export async function ownChildren(parent: FreshParent): Promise<OwnChild[]> {
+  const res = await parentApi(parent, 'GET', '/family/setup/profile');
+  if (res.status !== 200) throw new Error(`profile read failed: HTTP ${res.status}`);
+  const profile = JSON.parse(res.body) as Record<string, unknown>;
+  const list = (profile.children ?? profile.Children ?? []) as Record<string, unknown>[];
+  return list.map((c) => ({
+    id: String(c.id ?? c.learnerId ?? c.childId ?? ''),
+    name: String(c.studentName ?? c.name ?? c.displayName ?? ''),
+    dateOfBirth: String(c.dateOfBirth ?? ''),
+  }));
+}
+
+/**
+ * Raw family-plane API call for probes (attach-candidates, accept replay). Returns status + body;
+ * no assertions here.
+ */
+export function callFamilyApi(parent: FreshParent, method: 'GET' | 'POST', route: string, body?: unknown) {
+  return parentApi(parent, method, route, body);
 }

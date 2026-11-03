@@ -3,7 +3,7 @@
  * AC1 (generate a short, unique, shareable code), AC2 (WhatsApp carries code + link), AC9 (regenerate).
  */
 import { test, expect } from '../../../fixtures/family';
-import { inviteWhatsAppsFor, waitForInviteWhatsApp } from '../../../fixtures/devenv';
+import { expireInvite, inviteWhatsAppsFor, seedStudent, waitForInviteWhatsApp } from '../../../fixtures/devenv';
 import { StudentsRegisterPage } from '../../../pages/StudentsRegisterPage';
 
 const SCHOOL = 'Testenv High School - Main';
@@ -11,6 +11,13 @@ const SCHOOL = 'Testenv High School - Main';
 const CODE_FORMAT = /^[A-HJKMNP-Z2-9]{3}-[A-HJKMNP-Z2-9]{3}$/;
 const SENT = 'Invite code sent. You will see the student connect once the parent enters it.';
 const REGENERATED = 'New code sent. The old code no longer works.';
+// uta: the drawer always says why there is no live code.
+const NO_CODE_YET = 'No invite code yet. Generate one to send it to the parent on WhatsApp.';
+const CANCELLED = "The last code was cancelled. Generate a new one when you're ready.";
+/** "03 Nov 2026" — the server formats the expiry date in UTC. */
+const utcDay = (ms: number) =>
+  new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
+const OTP_LIMIT_PER_IP = 30;
 
 /** "06 Nov 2026, 1:31 PM" (browser-local) → epoch ms. The runner and browser share a timezone. */
 const parseDrawerDate = (text: string) => Date.parse(text.replace(',', ''));
@@ -151,12 +158,70 @@ test.describe('Family invite code drawer', () => {
     await expect(drawer.generateButton).toBeVisible();
   });
 
-  test('the drawer explains the state when there is no live code', async ({ page, student }) => {
+  test('before any code exists the drawer says there is no code yet (uta)', async ({ page, student }) => {
     const register = new StudentsRegisterPage(page);
     await register.goto();
     const drawer = await register.openFamilyInviteDrawer(student);
 
-    // Before any code exists the body should say something (e.g. "No code yet"), not render blank.
-    await expect(drawer.statusMessage).not.toHaveText(/^\s*$/);
+    await expect(drawer.statusMessage).toHaveText(NO_CODE_YET);
+    await expect(drawer.generateButton).toBeVisible();
+  });
+
+  test('after Cancel invite, reopening the drawer says the last code was cancelled (uta)', async ({ page, student }) => {
+    const register = new StudentsRegisterPage(page);
+    await register.goto();
+    const drawer = await register.openFamilyInviteDrawer(student);
+    await drawer.generate();
+    await drawer.startCancelInvite();
+    await drawer.confirmCancelInvite();
+    await drawer.close();
+
+    await register.goto();
+    const reopened = await register.openFamilyInviteDrawer(student);
+
+    await expect(reopened.statusMessage).toHaveText(CANCELLED);
+    await expect(reopened.code).toHaveCount(0);
+    await expect(reopened.generateButton).toBeVisible();
+  });
+
+  test('after the code expires, the drawer says when it expired and offers a new one (uta)', async ({ page, student }) => {
+    const register = new StudentsRegisterPage(page);
+    await register.goto();
+    const drawer = await register.openFamilyInviteDrawer(student);
+    const code = await drawer.generate();
+    await waitForInviteWhatsApp(code);
+    const expiredAt = Date.now() - 3600e3;
+    await expireInvite(student.id);
+
+    await register.goto();
+    const reopened = await register.openFamilyInviteDrawer(student);
+
+    await expect(reopened.statusMessage).toHaveText(`The last code expired on ${utcDay(expiredAt)}. Generate a new one.`);
+    await expect(reopened.code).toHaveCount(0);
+    await expect(reopened.generateButton).toBeVisible();
+  });
+
+  test('more than 30 invite sends in 15 minutes are not rate limited (ut9)', async ({ page }) => {
+    test.setTimeout(600_000);
+    // Generate + Regenerate + Resend on 11 students = 33 limited calls, past the old 30-per-IP OTP
+    // limit that used to answer 429. The new per-school invite limit is 300 per 15 minutes.
+    const students = [];
+    for (let i = 0; i < 11; i++) students.push(await seedStudent());
+    const register = new StudentsRegisterPage(page);
+    let sends = 0;
+    for (const student of students) {
+      await register.goto();
+      const drawer = await register.openFamilyInviteDrawer(student);
+      const code = await drawer.generate();
+      await expect(drawer.notice).toHaveText(SENT);
+      const fresh = await drawer.regenerate(code);
+      await expect(drawer.notice).toHaveText(REGENERATED);
+      await drawer.resend();
+      await expect(drawer.notice).toHaveText('Invite code re-sent.');
+      await expect(drawer.code).toHaveText(fresh);
+      await expect(drawer.error).toHaveCount(0);
+      sends += 3;
+    }
+    expect(sends).toBeGreaterThan(OTP_LIMIT_PER_IP);
   });
 });

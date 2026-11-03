@@ -1,12 +1,13 @@
 /**
  * PR 550 / ClickUp z94x8ebqpt — parent side of the family invite code, driven end to end:
  * the school owner issues the code in a second context, the seeded parent redeems it.
- * AC3 (auth required), AC4 (validate before proceeding), AC5/AC6 (existing-child match), AC7 (connect),
- * AC8 (expiry), AC9 (new code after expiry).
+ * AC3 (auth required), AC4 (validate before proceeding), AC7 (connect as a new child), AC8 (expiry),
+ * AC9 (new code after expiry). Cycle 2 regressions: ut8 (pasted codes), utb (declined wording), uta
+ * (drawer after a rejection). AC5–AC7 existing-child linking lives in existing-child-link.spec.ts.
  */
 import type { Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/family';
-import { expireInvite, seedStudent, waitForInviteWhatsApp, type SeededStudent } from '../../fixtures/devenv';
+import { expireInvite, waitForInviteWhatsApp, type SeededStudent } from '../../fixtures/devenv';
 import { StudentsRegisterPage } from '../../pages/StudentsRegisterPage';
 import { FamilyInviteCodeDrawer } from '../../pages/FamilyInviteCodeDrawer';
 import { LoginPage } from '../../pages/LoginPage';
@@ -16,6 +17,8 @@ import { FamilyDashboardPage } from '../../pages/family/FamilyDashboardPage';
 const SCHOOL = 'Testenv High School - Main';
 const INVALID = "That code isn't valid. Check it and try again.";
 const USED = 'This code has already been used. Ask the school for a new one if you still need to connect.';
+const DECLINED = 'This code was declined as "not my child", so it no longer works. If that was a mistake, ask the school for a new code.';
+const DRAWER_REJECTED = "The parent said this isn't their child. Check the father's mobile number, then generate a new code.";
 const WITHDRAWN = 'The school has withdrawn this code. Ask them to send you a new one.';
 const EXPIRED = `This code has expired. Ask ${SCHOOL} to send you a new one.`;
 const EMPTY = 'Enter the code from your WhatsApp message.';
@@ -71,6 +74,23 @@ test.describe('Join with an invite code', () => {
 
     await expect(join.cardValue('Child')).toHaveText(student.firstName);
   });
+
+  for (const [label, mangle] of [
+    ['spaces around and inside the code', (c: string) => `  ${c.slice(0, 3)} - ${c.slice(4)}  `.toLowerCase()],
+    ['a doubled dash', (c: string) => c.replace('-', '--')],
+    ['a space between every character', (c: string) => c.replace('-', '').split('').join(' ')],
+  ] as const) {
+    test(`a code pasted with ${label} is accepted (ut8)`, async ({ page, adminPage, student }) => {
+      const { code } = await issueCode(adminPage, student);
+      const join = new JoinWithCodePage(page);
+      await join.goto();
+
+      await join.submitCode(mangle(code));
+
+      await expect(join.codeInput).toHaveCount(0);
+      await expect(join.cardValue('Child')).toHaveText(student.firstName);
+    });
+  }
 
   test('an unknown code is rejected with "That code isn\'t valid"', async ({ page }) => {
     const join = new JoinWithCodePage(page);
@@ -192,7 +212,27 @@ test.describe('Join with an invite code', () => {
     await join.goto();
     await join.submitCode(code);
     await expect(join.connectButton).toHaveCount(0);
-    await expect(join.codeInput).toHaveAccessibleDescription(/.+/);
+    // utb: a declined code says so; it must not claim the code "has already been used".
+    await expect(join.codeInput).toHaveAccessibleDescription(DECLINED);
+  });
+
+  test('after the parent says "Not my child", the school drawer explains it and offers a new code (uta)', async ({ page, adminPage, student }) => {
+    const { code } = await issueCode(adminPage, student);
+    const join = new JoinWithCodePage(page);
+    await join.goto(bare(code));
+    await join.startReject();
+    await join.confirmRejectButton.click();
+    await new FamilyDashboardPage(page).expectLoaded();
+
+    const register = new StudentsRegisterPage(adminPage);
+    await expect(async () => {
+      await register.goto();
+      const drawer = await register.openFamilyInviteDrawer(student);
+      await expect(drawer.statusMessage).toHaveText(DRAWER_REJECTED, { timeout: 3_000 });
+    }).toPass({ timeout: 45_000 });
+    const drawer = new FamilyInviteCodeDrawer(adminPage);
+    await expect(drawer.code).toHaveCount(0);
+    await expect(drawer.generateButton).toBeVisible();
   });
 
   test('"Use a different code" returns to an empty form and does not re-fill from the link', async ({ page, adminPage, student }) => {
@@ -237,6 +277,29 @@ test.describe('Join with an invite code', () => {
     const dashboard = new FamilyDashboardPage(page);
     await dashboard.goto();
     await expect(dashboard.child(student.fullName)).toHaveCount(0);
+  });
+
+  test('a stale card opened by someone other than the addressee cannot connect after the school regenerates', async ({ browser, freshParent, adminPage, student }) => {
+    // The code went to the seeded parent's number; a different parent (wrong number / forwarded
+    // message) opens the card, then the school regenerates. Their Connect must be refused.
+    const { code: oldCode, drawer } = await issueCode(adminPage, student);
+    const context = await browser.newContext({ storageState: { cookies: [], origins: [] }, baseURL: process.env.QA_FAMILY_URL, ignoreHTTPSErrors: true });
+    const other = await context.newPage();
+    await other.goto(`/join?code=${bare(oldCode)}`);
+    await new LoginPage(other).signIn(freshParent.email, freshParent.password);
+    const join = new JoinWithCodePage(other);
+    await expect(join.connectButton).toBeVisible({ timeout: 30_000 });
+
+    const newCode = await drawer.regenerate(oldCode);
+    await waitForInviteWhatsApp(newCode);
+    await join.connect();
+
+    await expect(other).toHaveURL(/\/join/);
+    await expect(join.cardError).toBeVisible();
+    const dashboard = new FamilyDashboardPage(other);
+    await dashboard.goto();
+    await expect(dashboard.child(student.fullName)).toHaveCount(0);
+    await context.close();
   });
 
   test('a cancelled code is refused as withdrawn', async ({ page, adminPage, student }) => {
@@ -333,30 +396,5 @@ test.describe('Join with an invite code', () => {
     await join.expectLoaded();
     await expect(page).toHaveURL(new RegExp(`/join\\?code=${bare(code)}`));
     await expect(join.cardValue('Child')).toHaveText(student.firstName);
-  });
-});
-
-test.describe('Existing-child matching (AC5/AC6, Phase 2 — deferred in PR 550)', () => {
-  test('an invited student matching an existing child by name and date of birth offers to link to that child (AC5)', async ({ page, adminPage }) => {
-    // Same name + DOB as ADM-0001 Ali Khan, already in the seeded parent's family (cf. QA-1005).
-    const twin = await seedStudent({ firstName: 'Ali', lastName: 'Khan', dateOfBirth: '2015-01-01' });
-    const { code } = await issueCode(adminPage, twin);
-    const join = new JoinWithCodePage(page);
-
-    await join.goto(bare(code));
-
-    await expect(join.cardValue('Child')).toHaveText('Ali');
-    await expect(join.existingChildOption('Ali Khan')).toBeVisible();
-  });
-
-  test('creating a new child profile is always available, even when a match exists (AC6)', async ({ page, adminPage }) => {
-    const twin = await seedStudent({ firstName: 'Ali', lastName: 'Khan', dateOfBirth: '2015-01-01' });
-    const { code } = await issueCode(adminPage, twin);
-    const join = new JoinWithCodePage(page);
-
-    await join.goto(bare(code));
-
-    await expect(join.newChildNotice).toBeVisible();
-    await expect(join.connectButton).toBeEnabled();
   });
 });

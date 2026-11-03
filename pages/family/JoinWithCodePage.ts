@@ -17,6 +17,8 @@ export class JoinWithCodePage {
   readonly rejectConfirmation: Locator;
   readonly confirmRejectButton: Locator;
   readonly cancelRejectButton: Locator;
+  /** Error shown on the invite card after a refused Connect / Not my child (a bare danger Alert). */
+  readonly cardError: Locator;
 
   constructor(private readonly page: Page) {
     this.heading = page.getByRole('heading', { name: 'Join with an invite code', level: 1 });
@@ -33,6 +35,7 @@ export class JoinWithCodePage {
     this.rejectConfirmation = this.main.getByRole('heading', { name: 'Tell the school this is not your child?' });
     this.confirmRejectButton = page.getByRole('button', { name: "Yes, it's not my child" });
     this.cancelRejectButton = page.getByRole('button', { name: 'Cancel', exact: true });
+    this.cardError = this.main.getByRole('alert');
   }
 
   async goto(code?: string) {
@@ -73,15 +76,44 @@ export class JoinWithCodePage {
   }
 
   /**
-   * Phase 2 (AC5/AC6) UI — not built in PR 550. An option to link the invite to an existing child
-   * named `childName`; matched loosely (radio, button or option) since no markup exists yet.
+   * "Is <First> already in your family?" — a radio group (cards layout) listing the parent's own
+   * children, shown only when the family has at least one child the invite could be.
+   */
+  attachChoice(): Locator {
+    return this.main.getByRole('group', { name: /^Is .+ already in your family\?$/ });
+  }
+
+  /**
+   * The option to link the invite to the parent's existing child `childName`. The label is
+   * "Yes, this is <name>" with " (suggested)" for a lookalike. Names are matched case-insensitively:
+   * the family plane stores names lower-cased and the label shows them as stored.
    */
   existingChildOption(childName: string): Locator {
-    const name = new RegExp(childName, 'i');
-    return this.main
-      .getByRole('radio', { name })
-      .or(this.main.getByRole('option', { name }))
-      .or(this.main.getByRole('button', { name }));
+    const escaped = childName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return this.main.getByRole('radio', { name: new RegExp(`^Yes, this is ${escaped}( \\(suggested\\))?$`, 'i') });
+  }
+
+  /** Every "Yes, this is …" option, i.e. the children offered for linking. */
+  existingChildOptions(): Locator {
+    return this.main.getByRole('radio', { name: /^Yes, this is / });
+  }
+
+  /** The option marked "(suggested)", if any. */
+  suggestedChildOption(): Locator {
+    return this.main.getByRole('radio', { name: /\(suggested\)$/ });
+  }
+
+  /** "No, add <First> as a new child" (always offered when the radio group is shown). */
+  newChildOption(): Locator {
+    return this.main.getByRole('radio', { name: /^No, add .+ as a new child$/ });
+  }
+
+  async chooseExistingChild(childName: string) {
+    await this.existingChildOption(childName).check();
+  }
+
+  async chooseNewChild() {
+    await this.newChildOption().check();
   }
 
   async connect() {

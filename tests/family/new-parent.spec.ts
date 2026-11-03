@@ -1,6 +1,7 @@
 /**
  * PR 550 / ClickUp z94x8ebqpt — flows that need a parent account of their own.
- *  - AC3: a parent with no account registers from the invite link (OTP) and accepts.
+ *  - AC3 (cycle 2, ut6): a parent with no account registers from the invite link (OTP), is sent through
+ *    family setup when they press Connect, comes back to the same code and connects.
  *  - Lockout: 5 bad codes lock the caller out for 15 minutes. It runs on a freshly registered
  *    parent: the lockout is per caller, so it cannot block the shared seeded parent's other tests.
  */
@@ -13,10 +14,13 @@ import { LoginPage } from '../../pages/LoginPage';
 import { RegisterPage, VerifyWhatsAppPage } from '../../pages/RegisterPage';
 import { JoinWithCodePage } from '../../pages/family/JoinWithCodePage';
 import { FamilyDashboardPage } from '../../pages/family/FamilyDashboardPage';
+import { FamilySetupPage } from '../../pages/family/FamilySetupPage';
 
 const OTP = process.env.QA_OTP ?? '000000';
 const INVALID = "That code isn't valid. Check it and try again.";
 const LOCKED = 'Too many attempts. Try again in 15 minutes.';
+
+const bare = (code: string) => code.replace('-', '');
 
 async function issueCode(adminPage: Page, student: SeededStudent): Promise<string> {
   const register = new StudentsRegisterPage(adminPage);
@@ -44,7 +48,7 @@ async function registerFromInviteLink(context: BrowserContext, whatsAppNumber: s
 test.describe.configure({ timeout: 120_000 });
 
 test.describe('Invite codes for a parent without an account', () => {
-  test('a parent who registers from the invite link lands back on the code and can connect the child (AC3)', async ({ anonContext, adminPage }) => {
+  test('a parent who registers from the invite link is sent through family setup, back to the code, and can connect the child (AC3)', async ({ anonContext, adminPage }) => {
     const phone = uniquePakistaniMobile();
     const student = await seedStudent({ parentPhone: phone });
     const code = await issueCode(adminPage, student);
@@ -56,9 +60,25 @@ test.describe('Invite codes for a parent without an account', () => {
     await expect(join.cardValue('Child')).toHaveText(student.firstName);
     await join.connect();
 
+    // No family profile yet: Connect sends the parent to setup, carrying the code back.
+    await expect(page).toHaveURL(new RegExp(`/family/setup\\?returnUrl=${encodeURIComponent(`/join?code=${bare(code)}`)}$`));
+    await new FamilySetupPage(page).completeWithFatherOnly({
+      fatherName: 'Qafather Probe',
+      cnic: `35202-${phone.slice(4)}-1`,
+      whatsApp: phone,
+      homeAddress: '3 Test Road',
+      city: 'Lahore',
+      province: 'Punjab',
+      familyName: 'Probe',
+    });
+
+    await expect(page).toHaveURL(new RegExp(`/join\\?code=${bare(code)}$`));
+    await expect(join.cardValue('Child')).toHaveText(student.firstName);
+    await join.connect();
+
     const dashboard = new FamilyDashboardPage(page);
     await dashboard.expectLoaded();
-    await expect(dashboard.child(student.fullName)).toBeVisible();
+    await expect(dashboard.child(student.fullName)).toHaveCount(1);
   });
 
   test('after 5 wrong codes the parent is locked out, even for a valid code', async ({ anonContext, adminPage }) => {
