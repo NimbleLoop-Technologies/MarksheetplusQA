@@ -51,7 +51,8 @@ export default defineConfig({
       testDir: './tests/authenticated',
       // whatsapp-quota seeds its own campus/operator sessions (project below); it must not need .auth/user.json.
       // attendance-backdating needs the local stack's Postgres and runs serially (project below).
-      testIgnore: /(whatsapp-quota|attendance-backdating)\//,
+      // shell-notes runs in its own project below (no retries, serial privacy flow).
+      testIgnore: /(whatsapp-quota|attendance-backdating|shell-notes)\//,
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
@@ -77,6 +78,20 @@ export default defineConfig({
       fullyParallel: false,
       retries: 0,
       timeout: 3 * 60_000,
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: path.join(__dirname, '.auth', 'user.json'),
+      },
+      dependencies: ['setup'],
+    },
+    {
+      // PR 543 shell Notes drawer (browser localStorage). Desktop + phone viewport specs, storage-failure probes,
+      // and bug repros (notes-bugs.spec.ts asserts expected behaviour, so it fails while the bugs exist).
+      // notes-privacy.spec.ts self-seeds a throwaway two-campus owner (local stack only). Run with --workers=1.
+      name: 'shell-notes',
+      testDir: './tests/authenticated/shell-notes',
+      retries: 0,
+      timeout: 2 * 60_000,
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
