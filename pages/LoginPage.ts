@@ -18,7 +18,13 @@ export class LoginPage {
     await this.expectLoaded();
     await this.page.getByRole('textbox', { name: 'WhatsApp Number or Email' }).fill(identifier);
     await this.page.getByRole('button', { name: 'Continue' }).click();
-    await this.page.getByRole('textbox', { name: 'Password', exact: true }).fill(password);
+    // The password step re-renders right after it appears and can wipe an early fill; re-fill until it sticks.
+    const pwd = this.page.getByRole('textbox', { name: 'Password', exact: true });
+    await expect(async () => {
+      await pwd.fill(password);
+      await this.page.waitForTimeout(300);
+      await expect(pwd).toHaveValue(password, { timeout: 500 });
+    }).toPass({ timeout: 15_000 });
     await this.page.getByRole('button', { name: 'Sign in' }).click();
   }
 }

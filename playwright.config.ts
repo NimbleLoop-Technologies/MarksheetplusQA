@@ -50,7 +50,8 @@ export default defineConfig({
       name: 'authenticated',
       testDir: './tests/authenticated',
       // whatsapp-quota seeds its own campus/operator sessions (project below); it must not need .auth/user.json.
-      testIgnore: /whatsapp-quota\//,
+      // attendance-backdating needs the local stack's Postgres and runs serially (project below).
+      testIgnore: /(whatsapp-quota|attendance-backdating)\//,
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
@@ -67,6 +68,20 @@ export default defineConfig({
       retries: 0,
       timeout: 10 * 60_000,
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      // PR 548 back-dated attendance. Self-seeding: each file creates a "QA548 <suffix>" class and back-dates its
+      // sections in Postgres (QA_PG_*). Local stack only; run inside the PR netns with --workers=1.
+      name: 'attendance-backdating',
+      testDir: './tests/authenticated/attendance-backdating',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 3 * 60_000,
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: path.join(__dirname, '.auth', 'user.json'),
+      },
+      dependencies: ['setup'],
     },
     {
       name: 'family-setup',
