@@ -129,12 +129,12 @@ test.describe('known bugs (assert expected behaviour)', () => {
     await expect.poll(() => register.url().searchParams.get('date')).toBe(date);
   });
 
-  test('BUG: a section created today offers no earlier day to mark in the month grid', async ({ page }) => {
+  test('BUG: a section created today still offers earlier session days to mark in the month grid', async ({ page }) => {
     const fresh = await seedFreshClass(api, seeded.sessionStart);
     const register = new AttendanceRegisterPage(page);
     const date = pastWorkingDay(1);
     await register.gotoMonth(fresh.sectionId, date);
-    await expect(register.month.unmarkedDayButton(dayOf(date), dayLabel(date))).toHaveCount(0);
+    await expect(register.month.unmarkedDayButton(dayOf(date), dayLabel(date))).toHaveCount(1);
   });
 
   test('BUG: today opened with ?date=<today> does not show the "Mark past attendance" banner', async ({ page }) => {

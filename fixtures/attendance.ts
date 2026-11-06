@@ -103,6 +103,12 @@ export const schoolDb = {
     expect(rows, `backdate section ${sectionId}`).toHaveLength(1);
   },
 
+  async setAdmissionDate(studentId: string, isoDate: string) {
+    const rows = await psql(`update "Students" set "AdmissionDate" = (${lit(isoDate)}::date - interval '5 hours')
+      where "Id" = ${lit(studentId)} returning "Id"`);
+    expect(rows, `set admission ${studentId}`).toHaveLength(1);
+  },
+
   async audit(sectionId: string, registerDate: string): Promise<AuditRow[]> {
     const rows = await psql(`select "Action", "RegisterDate", "PresentCount", "AbsentCount", "ActorName", "OccurredAtUtc"
       from "AttendanceAuditEntries" where "SectionId" = ${lit(sectionId)} and "RegisterDate" = ${lit(registerDate)} order by "OccurredAtUtc"`);

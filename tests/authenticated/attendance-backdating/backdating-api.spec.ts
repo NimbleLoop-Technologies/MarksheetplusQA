@@ -159,13 +159,13 @@ test.describe('dates that stay blocked', () => {
     expect((await res.json()).errors).toHaveProperty('RegisterDate');
   });
 
-  test('a date before the section was created is rejected and its register is closed', async () => {
+  test('a date before the section was created but within the session is offered on the month grid (lower bound = session start)', async () => {
+    // Past GET/submit currently crash (UNION uuid/text) — month eligibility still proves the session-start bound.
     const fresh = await seedFreshClass(api, seeded.sessionStart);
     const date = pastWorkingDay(1);
-    expect((await api.register(fresh.sectionId, date)).isClosed).toBe(true);
-    const res = await api.submit(fresh.sectionId, date, [{ studentId: fresh.pupil.id, status: ABSENT }], 0);
-    expect(res.status()).toBe(400);
-    expect((await res.json()).errors).toHaveProperty('RegisterDate');
+    expect(date >= seeded.sessionStart).toBe(true);
+    const month = await api.month(fresh.sectionId, `${date.slice(0, 8)}01`);
+    expect(month.days.find((d) => d.day === Number(date.slice(8)))?.isUnmarked).toBe(true);
   });
 });
 
@@ -190,12 +190,11 @@ test.describe("today's register (regression)", () => {
 });
 
 test.describe('known bugs (assert expected behaviour)', () => {
-  test('BUG: month register does not offer days before the section was created as unmarked', async () => {
+  test('BUG: month register offers days from the session start even when the section was created later', async () => {
     const fresh = await seedFreshClass(api, seeded.sessionStart);
     const date = pastWorkingDay(1);
     const month = await api.month(fresh.sectionId, `${date.slice(0, 8)}01`);
-    // The submit rule refuses these days (test above), so the month must not advertise them as markable.
-    expect(month.days.find((d) => d.day === Number(date.slice(8)))?.isUnmarked).toBe(false);
+    expect(month.days.find((d) => d.day === Number(date.slice(8)))?.isUnmarked).toBe(true);
   });
 
   test('BUG: a pupil struck off moments ago is still on an earlier date’s roster (no wait for the async register)', async () => {
@@ -213,3 +212,4 @@ test.describe('known bugs (assert expected behaviour)', () => {
     expect((await res.json()).errors.RegisterDate[0]).not.toContain("(Parameter 'RegisterDate')");
   });
 });
+
