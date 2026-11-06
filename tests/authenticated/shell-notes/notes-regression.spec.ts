@@ -46,6 +46,7 @@ test.describe('shell notes: regression', () => {
     await notes.closeEditor();
     await notes.selectNote('Three');
     await notes.deleteSelectedNote();
+    await notes.confirmDelete();
     await notes.close();
     await shell.goToModule('Admission Office', /\/registrar\/students/);
     await shell.openNotesFromHeader();

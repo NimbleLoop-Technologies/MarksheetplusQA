@@ -1,7 +1,7 @@
 // PR 543 AC1 (phone) + AC5 theme row regression: the kebab ("More options") Notes and Theme rows at 390x844.
 import { test, expect } from '@playwright/test';
 import { AppShell } from '../../../pages/shell/AppShell';
-import { clearNotes, notesKey, readNotes } from '../../../fixtures/notes-storage';
+import { clearNotes, listServerNotes } from '../../../fixtures/notes-storage';
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 
@@ -26,7 +26,7 @@ test.describe('shell notes: phone', () => {
     await expect(notes.note('Phone note')).toBeVisible();
     await expect(notes.editor).toBeInViewport();
     await expect(notes.newNoteButton).toBeInViewport();
-    expect((await readNotes(page, await notesKey(page))).map((n) => n.Content)).toEqual(['Phone note\nfrom the bus']);
+    await expect.poll(async () => (await listServerNotes(page)).map((n) => n.content)).toEqual(['Phone note\nfrom the bus']);
     await notes.close();
   });
 
@@ -36,7 +36,6 @@ test.describe('shell notes: phone', () => {
     const startsDark = await html.evaluate((el) => el.classList.contains('dark'));
     await shell.mobileThemeRow.click();
     await expect.poll(() => html.evaluate((el) => el.classList.contains('dark'))).toBe(!startsDark);
-    // Restore (theme lives in this test's own browser context, but keep the run tidy).
     if (!(await shell.mobileThemeRow.isVisible())) await shell.openMobileMenu();
     await shell.mobileThemeRow.click();
     await expect.poll(() => html.evaluate((el) => el.classList.contains('dark'))).toBe(startsDark);

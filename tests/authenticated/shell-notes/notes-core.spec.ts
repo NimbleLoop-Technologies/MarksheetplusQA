@@ -1,7 +1,7 @@
-// PR 543 (CU z94x8e3azg) "An open notepad on the Dashboard screen": AC1 + AC2 on desktop.
+// PR 543 (CU z94x8e3azg) cycle 2: AC1 + AC2 on desktop (server-side notes).
 import { test, expect } from '@playwright/test';
 import { AppShell } from '../../../pages/shell/AppShell';
-import { clearNotes, notesKey, readNotes } from '../../../fixtures/notes-storage';
+import { clearNotes, listServerNotes } from '../../../fixtures/notes-storage';
 
 test.describe('shell notes: create, edit, switch, delete (desktop)', () => {
   let shell: AppShell;
@@ -16,6 +16,7 @@ test.describe('shell notes: create, edit, switch, delete (desktop)', () => {
     await expect(shell.headerNotesButton).toBeVisible();
     const notes = await shell.openNotesFromHeader();
     await expect(notes.emptyStateHeading).toBeVisible();
+    await expect(notes.emptyStateDescription()).toBeVisible();
     await expect(notes.newNoteButton).toBeVisible();
   });
 
@@ -27,8 +28,9 @@ test.describe('shell notes: create, edit, switch, delete (desktop)', () => {
 
     await expect(notes.note('Staff meeting at 2pm')).toBeVisible();
     await expect(notes.editor).toHaveValue('Staff meeting at 2pm\nBring the attendance report\nCall Mr. Ali');
-    const stored = await readNotes(page, await notesKey(page));
-    expect(stored.map((n) => n.Content)).toEqual(['Staff meeting at 2pm\nBring the attendance report\nCall Mr. Ali']);
+    await expect.poll(async () => (await listServerNotes(page)).map((n) => n.content)).toEqual([
+      'Staff meeting at 2pm\nBring the attendance report\nCall Mr. Ali',
+    ]);
   });
 
   test('several notes keep separate contents when switching between them', async () => {
@@ -56,15 +58,15 @@ test.describe('shell notes: create, edit, switch, delete (desktop)', () => {
     await expect(notes.editor).toHaveValue('Keep me');
   });
 
-  test('deleting a note removes it from the list and from browser storage', async ({ page }) => {
+  test('deleting a note with content asks for confirmation, then removes it from the list and the server', async ({ page }) => {
     const notes = await shell.openNotesFromHeader();
     await notes.newNote('First');
     await notes.newNote('Second');
     await notes.selectNote('First');
     await notes.deleteSelectedNote();
-    // Only meaningful when no confirm exists yet; a confirm (review comment) would be accepted here first.
+    await notes.confirmDelete();
     expect(await notes.noteTitles()).toEqual(['Second']);
-    await expect.poll(async () => (await readNotes(page, await notesKey(page))).map((n) => n.Content)).toEqual(['Second']);
+    await expect.poll(async () => (await listServerNotes(page)).map((n) => n.content)).toEqual(['Second']);
   });
 
   test('Escape closes the drawer and returns focus to the header Notes action', async ({ page }) => {
@@ -74,7 +76,7 @@ test.describe('shell notes: create, edit, switch, delete (desktop)', () => {
     await expect(shell.headerNotesButton).toBeFocused();
   });
 
-  test('note titles trim leading spaces, keep emoji/Urdu, and fall back to "Untitled note"', async () => {
+  test('note titles trim leading spaces, capitalise the first letter, keep emoji/Urdu, and fall back to "Untitled note"', async () => {
     const notes = await shell.openNotesFromHeader();
     await notes.newNote('   indented title\nbody');
     await notes.newNote('😀 emoji first');

@@ -1,4 +1,4 @@
-// PR 543 AC3: notes are not wiped out on page change, reload (sign-out/sign-in is in notes-privacy.spec.ts).
+// PR 543 AC3: notes survive page change and reload (sign-out/sign-in is in notes-privacy).
 import { test, expect } from '@playwright/test';
 import { AppShell } from '../../../pages/shell/AppShell';
 import { clearNotes } from '../../../fixtures/notes-storage';

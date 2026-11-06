@@ -77,6 +77,26 @@ export class NotesDrawer {
     await expect(this.status).toHaveText(/Saved|Not saved/, { timeout: 60_000 });
   }
 
+  /** Accepts the delete confirmation dialog (IConfirmService). */
+  async confirmDelete() {
+    const dlg = this.deleteConfirmation();
+    await expect(dlg).toBeVisible({ timeout: 5_000 });
+    await dlg.getByRole('button', { name: /^Delete$/ }).click();
+    await expect(dlg).toBeHidden();
+  }
+
+  /** Cancels the delete confirmation dialog. */
+  async cancelDelete() {
+    const dlg = this.deleteConfirmation();
+    await expect(dlg).toBeVisible({ timeout: 5_000 });
+    await dlg.getByRole('button', { name: /Keep note/i }).click();
+    await expect(dlg).toBeHidden();
+  }
+
+  conflictAlert(): Locator {
+    return this.dialog.getByRole('alert').filter({ hasText: /changed somewhere else/i });
+  }
+
   /**
    * Types key by key at the end of the selected note. Uses page.keyboard (no per-action timeout) so a slow
    * editor shows up as a slow save, not as an actionability timeout.

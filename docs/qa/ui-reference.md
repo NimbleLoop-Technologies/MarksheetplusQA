@@ -161,34 +161,17 @@ Recorded 2026-11-03, PR 550 head 69080e19.
 
 ---
 
-## Shell Notes drawer (PR 543, recorded 2026-11-05 on the local stack, head 4c9e4b69)
+## Shell Notes drawer (PR 543, recorded 2026-11-06 on the local stack, head 481896bd)
 
-### App shell header / kebab — `pages/shell/AppShell.ts`
-- banner (desktop): button "Current campus: <name>" (chip text is "<initials>\n<name>"; the prefix is sr-only),
-  button "Search", button "Notes" (`[data-shell-notes-open]`), button "Switch to dark|light theme"
-  (`aria-pressed`), button "Open user menu" → menu items "Subscription", "About", "Support", "Log out".
-- Campus chip menu: text "Switch to", menuitem per other campus (campus name only, e.g. "North"),
-  menuitem "Campus settings", "Add campus". A switch force-reloads the app.
-- "Log out" → /authentication/logout-callback: heading "You've been signed out", button "Return to home".
-- Phone (390x844): the header Notes action is hidden; button "More options" opens the kebab with rows
-  button "Notes" and button "Theme Switch to dark|light theme" (same `[data-shell-mobile-theme]` block).
-- Module rail: navigation "Modules" → links "Home", "Admission Office", "Classrooms", "Account Office", "Staff Room",
-  "Bookshop", "Examination Center", "Setup".
-- Home (/): heading "Home" (h1); tiles as term/definition pairs "Strength", "Absent today", "Pending results",
-  "Attendance pending"; heading "Calendar" with buttons "Previous month", "Today", "Next month".
-- Boot: a status "Loading application" overlay covers the a11y tree until WASM boot finishes.
+Server-side notepad behind the header **Notes** action (`ShellNotes`). Notes are stored on the RestApi (`GET/POST/PUT/DELETE /notes`) for the signed-in account on the current campus. The browser holds them in memory only — nothing in localStorage after logout; the same notes appear on every device.
+
+- Desktop: header Notes button opens a right-hand Drawer.
+- Phone: More options → Notes opens the same drawer as a bottom sheet.
+- Empty state: "No notes yet" + "Jot down reminders and to-dos. Only you can see them."
+- Typing saves after a 400 ms pause; leaving the editor / switching / closing flushes immediately.
+- Delete of a non-empty note asks via IConfirmService ("Delete this note?" / Delete / Keep note).
+- Conflicts from another tab/device show "This note changed somewhere else" with Load latest / Keep mine.
+- Description: "Private to you on this campus. Saved to your account as you type."
+- Max length: 10,000 characters per note.
 
 ### Notes drawer — `pages/shell/NotesDrawer.ts`
-- dialog "Notes" (`#marksheet-notes`, `[data-shell-notes]`): heading "Notes" (h2), text "Private to you. Saved on this
-  browser as you type.", button "Close panel". Bottom sheet on phones. Esc closes; focus returns to the header action.
-- First status in the dialog = the save live region ("Saving..." / "Saved" / "Not saved"). Every TailwindUi Button
-  also nests its own empty status.
-- Empty: heading "No notes yet" (the description text is NOT rendered at 4c9e4b69; it leaks as a `description` attribute).
-- Footer button "New note" (`[data-notes-new]`), hidden while loading or after a load failure.
-- List: group "Choose a note" → one button per note titled by its first line (trimmed, first letter upper-cased,
-  "Untitled note" if blank), `aria-expanded` true for the selected one.
-- Editor (`[data-notes-editor]`): title paragraph, buttons "Delete note" (no confirm), "Close note", textbox "Note"
-  (placeholder "Write your note here..."). New note does not focus the textbox.
-- Save failure: alert "Your latest changes weren't saved" / "Keep this page open and retry." + button "Retry save".
-- Load failure: alert "We couldn't load your notes" / "Try again before making changes." + button "Try again".
-- Storage: localStorage `mp-dashboard-notes:v1:<userId>:<tenantId>`, JSON `[{"Id","Content"}]`, rewritten on every keystroke.

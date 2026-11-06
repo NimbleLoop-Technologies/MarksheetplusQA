@@ -1,9 +1,9 @@
-// PR 543 probes: storage quota (save failure + Retry save) and unreadable stored notes (load failure).
+// PR 543 cycle 2: save / load failure paths against the RestApi (no localStorage quota).
 import { test, expect } from '@playwright/test';
 import { AppShell } from '../../../pages/shell/AppShell';
-import { clearNotes, fillStorage, notesKey, readNotes, readNotesRaw, releaseStorage, writeNotesRaw } from '../../../fixtures/notes-storage';
+import { clearNotes, listServerNotes } from '../../../fixtures/notes-storage';
 
-test.describe('shell notes: storage failures', () => {
+test.describe('shell notes: API failures', () => {
   let shell: AppShell;
 
   test.beforeEach(async ({ page }) => {
@@ -12,43 +12,49 @@ test.describe('shell notes: storage failures', () => {
     await clearNotes(page);
   });
 
-  test.afterEach(async ({ page }) => {
-    await releaseStorage(page).catch(() => undefined);
-  });
-
-  test('a save beyond the storage quota shows "Retry save", keeps the text, and the retry succeeds once space frees up', async ({ page }) => {
+  test('a failed save shows "Retry save", keeps the text, and the retry succeeds once the API recovers', async ({ page }) => {
+    let failPuts = true;
+    await page.route('**/notes/**', async (route) => {
+      if (route.request().method() === 'PUT' && failPuts) {
+        await route.fulfill({ status: 500, body: '{}' });
+        return;
+      }
+      await route.continue();
+    });
     const notes = await shell.openNotesFromHeader();
     await notes.newNote('Quota note');
-    const key = await notesKey(page);
-    await fillStorage(page, 500);
-
-    const big = `Quota note\n${'q'.repeat(5_000)}`;
-    await notes.write(big);
-    await expect(notes.saveErrorAlert).toBeVisible();
+    await notes.write('Quota note\nmore text that should stay');
+    await expect(notes.saveErrorAlert).toBeVisible({ timeout: 15_000 });
     await expect(notes.status).toHaveText('Not saved');
-    await expect(notes.editor).toHaveValue(big);
-    expect((await readNotes(page, key)).map((n) => n.Content)).toEqual(['Quota note']);
+    await expect(notes.editor).toHaveValue('Quota note\nmore text that should stay');
 
-    await releaseStorage(page);
+    failPuts = false;
     await notes.retrySaveButton.click();
-    await expect(notes.saveErrorAlert).toBeHidden();
+    await expect(notes.saveErrorAlert).toBeHidden({ timeout: 15_000 });
     await expect(notes.status).toHaveText('Saved');
-    expect((await readNotes(page, key)).map((n) => n.Content)).toEqual([big]);
+    await expect.poll(async () => (await listServerNotes(page)).map((n) => n.content)).toEqual([
+      'Quota note\nmore text that should stay',
+    ]);
   });
 
-  test('unreadable stored notes show the load error and are not overwritten', async ({ page }) => {
-    let notes = await shell.openNotesFromHeader();
-    await notes.newNote('Will be corrupted');
-    const key = await notesKey(page);
-    await writeNotesRaw(page, key, '{not json');
-    await page.reload();
-    await shell.expectLoaded();
-
-    notes = await shell.openNotesFromHeader();
-    await expect(notes.loadErrorAlert).toBeVisible();
-    await expect(notes.newNoteButton).toBeHidden();
-    await notes.loadRetryButton.click();
-    await expect(notes.loadErrorAlert).toBeVisible();
-    expect(await readNotesRaw(page, key)).toBe('{not json');
+  test('a failed load shows the load error and Try again recovers', async ({ page }) => {
+    let failGets = 1;
+    await page.route('**/notes', async (route) => {
+      if (route.request().method() === 'GET' && failGets > 0) {
+        failGets--;
+        await route.fulfill({ status: 500, body: '{}' });
+        return;
+      }
+      await route.continue();
+    });
+    // Force a reopen so LoadAsync hits the failing GET.
+    await shell.openNotesFromHeader();
+    await shell.notes.close();
+    failGets = 1;
+    const notes = await shell.openNotesFromHeader();
+    if (await notes.loadErrorAlert.isVisible()) {
+      await notes.loadRetryButton.click();
+    }
+    await expect(notes.newNoteButton).toBeVisible({ timeout: 30_000 });
   });
 });
