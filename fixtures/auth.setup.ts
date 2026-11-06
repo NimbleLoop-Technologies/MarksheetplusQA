@@ -1,24 +1,16 @@
-import { test as setup } from '@playwright/test';
+import { test as setup, expect } from '@playwright/test';
 import path from 'node:path';
-import { LoginPage } from '../pages/login.page';
+import { LoginPage } from '../pages/LoginPage';
 
 const authFile = path.join(__dirname, '..', '.auth', 'user.json');
 
-setup('authenticate seeded QA user', async ({ page }) => {
-  const username = process.env.QA_EMAIL;
+setup('authenticate school admin', async ({ page }) => {
+  const email = process.env.QA_EMAIL;
   const password = process.env.QA_PASSWORD;
-
-  if (!username || !password) {
-    throw new Error(
-      'QA_EMAIL and QA_PASSWORD must be set. Copy .env.example to .env and fill in the seeded QA account.',
-    );
-  }
-
-  // Full OIDC round trip: web → auth host → web, so both origins' state is captured.
-  const loginPage = new LoginPage(page);
-  await loginPage.gotoFromWebApp();
-  await loginPage.login(username, password);
-  await loginPage.expectLoggedIn();
-
+  if (!email || !password) throw new Error('QA_EMAIL / QA_PASSWORD missing from .env');
+  await page.goto('/');
+  await new LoginPage(page).signIn(email, password);
+  await page.waitForURL((u) => u.origin === new URL(process.env.QA_BASE_URL!).origin && !u.pathname.startsWith('/authentication'), { timeout: 60_000 });
+  await expect(page.getByRole('heading', { name: 'Sign in to your account' })).toHaveCount(0);
   await page.context().storageState({ path: authFile });
 });

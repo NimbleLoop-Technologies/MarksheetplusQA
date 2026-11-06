@@ -7,10 +7,12 @@
     "test": "playwright test",
     "test:auth": "playwright test --project=anonymous",
     "test:regression": "playwright test --project=authenticated",
+    "test:family": "playwright test --project=family",
     "test:headed": "playwright test --headed",
     "test:ui": "playwright test --ui",
     "report": "playwright show-report",
     "typecheck": "tsc --noEmit",
+    "test:notes": "playwright test --project=shell-notes",
     "test:critical": "playwright test --grep @critical"
   },
   "devDependencies": {
