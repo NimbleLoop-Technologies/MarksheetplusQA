@@ -46,6 +46,10 @@ Never select on Bootstrap/Metronic utility classes. They change with styling and
 ## Structure
 
 - One behaviour per test. The test name states the behaviour: *"login is rejected with an invalid password"*, not *"test login 2"*.
+- Tag core journeys `{ tag: '@critical' }` (sign-in, admissions, attendance, results, fees). `npm run test:critical` runs only those.
+- An open bug stays covered: wrap the spec with `test.fail()` and put the bug slug from `knowledge/known-issues.md` in the test name. When the bug is fixed the test "unexpectedly passes" and someone removes the marker.
+- A test that needs a precondition the environment may lack (credentials, a feature flag, permission to create tenants) uses `test.skip(condition, 'why')` — never a silent early `return`.
+- Hosts come from `pages/urls.ts` (`WEB_URL`, `AUTH_URL`). Sign-in and sign-up live on the auth host.
 
 ## Waiting
 

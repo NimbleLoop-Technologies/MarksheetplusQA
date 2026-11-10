@@ -1,0 +1,14 @@
+{
+  "name": "marksheetplus-qa",
+  "owner": { "name": "Umair Tahir" },
+  "plugins": [
+    { "name": "test-strategy", "source": "./test-strategy", "description": "QA skills: test-strategy" },
+    { "name": "functional-testing", "source": "./functional-testing", "description": "QA skills: functional-testing" },
+    { "name": "automation", "source": "./automation", "description": "QA skills: automation" },
+    { "name": "performance-testing", "source": "./performance-testing", "description": "QA skills: performance-testing" },
+    { "name": "api-testing", "source": "./api-testing", "description": "QA skills: api-testing" },
+    { "name": "quality-metrics", "source": "./quality-metrics", "description": "QA skills: quality-metrics" },
+    { "name": "accessibility-testing", "source": "./accessibility-testing", "description": "QA skills: accessibility-testing" },
+    { "name": "qa-toolkit", "source": "./qa-toolkit", "description": "QA skills: qa-toolkit" }
+  ]
+}

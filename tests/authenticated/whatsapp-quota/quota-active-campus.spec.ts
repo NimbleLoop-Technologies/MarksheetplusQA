@@ -103,9 +103,8 @@ test('an archived package is hidden from campuses and cannot be requested (400)'
 });
 
 test('AC9: disabling "Fee dues" skips fee WhatsApps with DisabledByCampus; results still send', async () => {
-  const prefs = await (await owner.api.get('campus/notification-preferences')).json();
-  expect(prefs.items.map((i: { kind: number; enabled: boolean }) => [i.kind, i.enabled])).toEqual([[WA_KIND.ResultPublished, true], [WA_KIND.PendingDues, true]]);
-
+  // Opt-in since b52eeae6 (z94x8ecp90; default OFF is covered by notifications-default-off.spec.ts): the request
+  // names the kinds left OFF, so this save switches Result published ON and leaves Fee dues OFF.
   expect((await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [WA_KIND.PendingDues] } })).status()).toBe(200);
   const after = await (await owner.api.get('campus/notification-preferences')).json();
   expect(after.items.find((i: { kind: number }) => i.kind === WA_KIND.PendingDues).enabled).toBe(false);
@@ -119,8 +118,28 @@ test('AC9: disabling "Fee dues" skips fee WhatsApps with DisabledByCampus; resul
 
   // The first metered send of the month lazily creates the plan allocation and charges it.
   const plan = (await quotaDb.allocations(owner.tenantId)).find((a) => a.Source === 0);
+  // Result was charged; the add-on approved above expires in 90 days (after month end), so the plan
+  // allocation (expiring 1st of next month) is the earliest-expiring one and is charged (B3 rule).
   expect(plan).toMatchObject({ Granted: 100, Used: 1 });
+  expect(resultRow.QuotaAllocationId).toBe(plan!._id);
   expect((await summary()).used).toBe(1);
+});
+
+test('B11 z94x8ebv0y: a toggle change applies to the very next notification (no 60 s Worker cache)', async () => {
+  // Prime: a Result send reads the preference (the old Worker cached it for 60 s).
+  expect((await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [] } })).status()).toBe(200);
+  const primed = await quotaDb.waitProcessed(await quotaDb.queueWhatsApp(owner.tenantId, WA_KIND.ResultPublished));
+  expect(primed.Status).toBe(WA_STATUS.Sent);
+
+  // Switch Result published OFF right after that send: the next Result row must be skipped.
+  expect((await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [WA_KIND.ResultPublished] } })).status()).toBe(200);
+  const off = await quotaDb.waitProcessed(await quotaDb.queueWhatsApp(owner.tenantId, WA_KIND.ResultPublished));
+  expect(off).toMatchObject({ Status: WA_STATUS.Skipped, SkipReason: 'DisabledByCampus' });
+
+  // And back ON: the next one is sent again.
+  expect((await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [] } })).status()).toBe(200);
+  const on = await quotaDb.waitProcessed(await quotaDb.queueWhatsApp(owner.tenantId, WA_KIND.ResultPublished));
+  expect(on.Status).toBe(WA_STATUS.Sent);
 });
 
 test('release on failure: a row that cannot be sent after reserving gives its credit back', async () => {
@@ -137,8 +156,8 @@ test('AC5 + AC8 + AC10: when every allocation is used up, metered sends are skip
   await quotaDb.setUsed(owner.tenantId, 0, 'granted');
   await quotaDb.setUsed(owner.tenantId, 1, 'granted');
   expect((await summary())).toMatchObject({ remaining: 0, isExhausted: true });
-  // No message has been skipped yet, so the layout alert stays off until one is.
-  expect(await status()).toEqual({ isExhausted: false, skippedThisMonth: 0 });
+  // Q1 z94x8ebv8f (PO 2026-11-03): the layout alert turns on as soon as Remaining is 0, before any skip.
+  expect(await status()).toEqual({ isExhausted: true, skippedThisMonth: 0 });
 
   const metered = await quotaDb.queueWhatsApp(owner.tenantId, WA_KIND.ResultPublished);
   const exempt = await quotaDb.queueWhatsApp(owner.tenantId, WA_KIND.StaffInvite);

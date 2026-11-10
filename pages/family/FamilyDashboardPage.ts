@@ -24,4 +24,12 @@ export class FamilyDashboardPage {
   child(fullName: string): Locator {
     return this.main.getByText(fullName, { exact: true });
   }
+
+  /**
+   * The line under a child's name: "<School> · <class>" per connected school, or "Not connected to a
+   * school yet". It is the name's next sibling <div> (Home.razor RenderChildText); no role or label.
+   */
+  childSchoolLine(fullName: string): Locator {
+    return this.child(fullName).locator('xpath=following-sibling::div[1]');
+  }
 }

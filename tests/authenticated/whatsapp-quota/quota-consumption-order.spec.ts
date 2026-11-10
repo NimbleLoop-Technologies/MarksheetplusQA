@@ -18,6 +18,8 @@ test.beforeAll(async () => {
   ops = await BackOffice.signIn();
   pkg = await ops.newPackage(100, 100, 90);
   await ops.activate(await quotaDb.subscriptionId(owner.tenantId));
+  // WhatsApp notifications are opt-in since b52eeae6 (z94x8ecp90): switch Result published on explicitly.
+  expect((await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [WA_KIND.PendingDues] } })).status()).toBe(200);
   const req = await owner.api.post('subscription/quota/requests', { data: { packageId: pkg.id } });
   expect(req.status()).toBe(201);
   const id = (await ops.requests('Requested')).find((r) => r.tenantId === owner.tenantId)!.id;
