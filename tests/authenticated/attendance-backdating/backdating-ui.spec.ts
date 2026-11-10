@@ -107,8 +107,8 @@ test.describe('known bugs (assert expected behaviour)', () => {
     await register.openSubmit();
     await register.submitDialog.confirm();
     await register.submitDialog.expectClosed();
-    await expect(register.closedBanner()).toBeVisible();
-    await expect(register.closedBanner()).not.toContainText("Only today's register can be marked");
+    await expect(register.submittedBanner()).toBeVisible();
+    await expect(page.getByText("Only today's register can be marked")).toHaveCount(0);
   });
 
   test('BUG: when someone else back-fills the same date first, the dialog explains it and Review keeps that date', async ({ page }) => {
@@ -123,8 +123,8 @@ test.describe('known bugs (assert expected behaviour)', () => {
 
     await register.openSubmit();
     await register.submitDialog.confirm();
-    await expect(register.submitDialog.statusText()).not.toHaveText('');
-    await expect(register.submitDialog.statusText()).not.toContainText("Only today's register can be marked");
+    await expect(register.submitDialog.statusText()).toContainText('correction');
+    await expect(register.submitDialog.dialog).not.toContainText("Only today's register can be marked");
     await register.submitDialog.review();
     await expect.poll(() => register.url().searchParams.get('date')).toBe(date);
   });

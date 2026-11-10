@@ -36,7 +36,8 @@ export class SubmitAttendanceDialog {
 
   /** The warning/status text the dialog shows after the server refused the register. */
   statusText(): Locator {
-    return this.dialog.getByRole('status');
+    // The dialog also holds empty sr-only live regions (buttons, data-submit-status); the outcome is the alert with a heading.
+    return this.dialog.locator('div').filter({ has: this.page.getByRole('heading', { name: /needs review|submitted by another|roster changed/i }) }).last();
   }
 
   async expectClosed() {

@@ -66,18 +66,17 @@ test('z94x8ec4qw: submit confirmation names the date (today path)', async ({ pag
   await register.submitDialog.cancel();
 });
 
-test('NEW: past-date register GET fails with a server error (UNION uuid/text in GetRosterHistoryAsync)', async () => {
+test('z94x8ec9p5: past-date register GET loads (no UNION uuid/text crash in GetRosterHistoryAsync)', async () => {
   const fresh = await seedFreshClass(api, seeded.sessionStart);
   const res = await api.http.get('attendance-register/today', { params: { sectionId: fresh.sectionId, date: pastWorkingDay(1) } });
-  expect(res.status()).toBe(400);
-  expect(await res.text()).toMatch(/could not load/i);
+  expect(res.status(), await res.text()).toBe(200);
+  expect((await res.json()).students.map((s: { studentId: string }) => s.studentId)).toContain(fresh.pupil.id);
 });
 
-test('NEW: past-date submit fails with a generic connection error (same roster history crash)', async () => {
+test('z94x8ec9p5: past-date submit is accepted (same roster history path)', async () => {
   const fresh = await seedFreshClass(api, seeded.sessionStart);
   const res = await api.submit(fresh.sectionId, pastWorkingDay(1), [{ studentId: fresh.pupil.id, status: ABSENT }], 0);
-  expect(res.status()).toBe(400);
-  expect(await res.text()).toMatch(/could not submit|connection/i);
+  expect(res.status(), await res.text()).toBe(200);
 });
 
 test('today submit still works (regression)', async () => {
