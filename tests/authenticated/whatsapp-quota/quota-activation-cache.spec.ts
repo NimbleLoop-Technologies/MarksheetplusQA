@@ -1,30 +1,69 @@
 /**
- * PR 538 — BUG REPRO: right after the back office activates a campus, GET subscription/quota reports
- * Included 0 / Remaining 0 / IsExhausted true for up to 60 s, because QuotaManager caches the trial
- * entitlement (quota-entitlement:{tenant}:{resource}, 60 s) while GetQuotaSummary computes IsEntitled fresh.
+ * PR 538 cycle-1 B2 (not filed as a subtask) — 60 s entitlement cache after activation.
+ *
+ * PR 554 made GET subscription/quota/status check the subscription FRESH, but QuotaManager.GetBalanceAsync
+ * still reads the entitlement through the 60 s cache (quota-entitlement:{tenant}:{resource}). Before the
+ * month's first send there is no plan allocation document, so a cached "Trialing" entitlement makes the
+ * balance 0 → Remaining 0 → IsExhausted true. Since PR 554 the shell shows the alert at Remaining 0
+ * (Q1 z94x8ebv8f), so a campus that was JUST activated would see a false "WhatsApp quota exhausted." banner.
+ *
+ * Each test uses its own fresh trial campus; the trial read primes the cache, the operator activates, and
+ * the owner reloads within a few seconds (well inside 60 s).
  */
 import { test, expect } from '@playwright/test';
-import { BackOffice, newCampusOwner, quotaDb, type CampusOwner } from '../../../fixtures/quota';
+import { BackOffice, newCampusOwner, quotaDb, signInToWebApp, type CampusOwner } from '../../../fixtures/quota';
+import { QuotaShellNotice } from '../../../pages/setup/QuotaShellNotice';
+import { SubscriptionQuotaCard } from '../../../pages/setup/SubscriptionQuotaCard';
 
-let owner: CampusOwner;
+test.use({ ignoreHTTPSErrors: true });
+
 let ops: BackOffice;
+const owners: CampusOwner[] = [];
 
 test.beforeAll(async () => {
-  owner = await newCampusOwner();
   ops = await BackOffice.signIn();
 });
 
 test.afterAll(async () => {
   await ops?.dispose();
-  await owner?.api.dispose();
+  for (const o of owners) await o.api.dispose();
 });
 
-test('a campus that just got activated sees its plan allowance at once (not "0 remaining, exhausted")', async () => {
+test('B2: a campus that just got activated sees its plan allowance at once (not "0 remaining, exhausted")', async () => {
+  const owner = await newCampusOwner();
+  owners.push(owner);
   // The owner looks at the quota while still on trial (this primes the entitlement cache)...
   expect(await (await owner.api.get('subscription/quota')).json()).toMatchObject({ isTrial: true, included: 0 });
+  expect(await (await owner.api.get('subscription/quota/status')).json()).toEqual({ isExhausted: false, skippedThisMonth: 0 });
   // ...then the operator activates the subscription and the owner reloads the Subscription page.
   await ops.activate(await quotaDb.subscriptionId(owner.tenantId));
+  const activatedAt = Date.now();
   const quota = await (await owner.api.get('subscription/quota')).json();
+  const status = await (await owner.api.get('subscription/quota/status')).json();
+  const elapsed = Math.round((Date.now() - activatedAt) / 1000);
   expect(quota.isEntitled).toBe(true);
-  expect(quota, 'Included/Remaining right after activation').toMatchObject({ included: 100, remaining: 100, isExhausted: false });
+  expect(status, `layout status ${elapsed}s after activation (drives the shell alert)`).toEqual({ isExhausted: false, skippedThisMonth: 0 });
+  expect(quota, `summary ${elapsed}s after activation`).toMatchObject({ included: 100, remaining: 100, isExhausted: false });
+});
+
+test('B2: the owner does not get a false "WhatsApp quota exhausted" banner right after activation', async ({ page }) => {
+  const owner = await newCampusOwner();
+  owners.push(owner);
+  await signInToWebApp(page, owner);
+  // Trial: the Subscription page reads subscription/quota (primes the cache in the RestApi).
+  const card = new SubscriptionQuotaCard(page);
+  await card.open();
+  await expect(card.trialNotice()).toBeVisible();
+
+  await ops.activate(await quotaDb.subscriptionId(owner.tenantId));
+  await page.goto('/');
+  const shell = new QuotaShellNotice(page);
+  await expect(shell.homeHeading()).toBeVisible({ timeout: 30_000 });
+  // The shell reads subscription/quota/status after the layout renders; give it time to show (or not).
+  await page.waitForResponse((r) => r.url().includes('subscription/quota/status'), { timeout: 15_000 }).catch(() => undefined);
+  await page.waitForTimeout(1_500);
+  if (await shell.notice.count()) {
+    await page.screenshot({ path: test.info().outputPath('b2-false-exhausted-banner.png'), fullPage: true });
+  }
+  await expect(shell.notice, 'false "WhatsApp quota exhausted." banner seconds after activation').toHaveCount(0);
 });

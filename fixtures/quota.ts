@@ -16,7 +16,8 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
-import { expect, request as pwRequest, type APIRequestContext } from '@playwright/test';
+import { expect, request as pwRequest, type APIRequestContext, type Page } from '@playwright/test';
+import { LoginPage } from '../pages/LoginPage';
 
 const run = promisify(execFile);
 
@@ -28,8 +29,12 @@ const WORKER_LOG = process.env.QA_WORKER_LOG || '/workspace/devenv/worker.log';
 
 const ctx = () => pwRequest.newContext({ ignoreHTTPSErrors: true });
 
-/** Throwaway 03xx mobile in a range reserved for these specs (03{40-49}538xxxx); callers retry on a 409 clash. */
-const quotaMobile = () => `03${randomInt(40, 50)}538${String(randomInt(0, 10_000)).padStart(4, '0')}`;
+/**
+ * Throwaway 034x mobile for these specs. Cycle 1 used 03{40-49}538xxxx (10^5 numbers, ~20 owners per run,
+ * plus the operator's own 03455380001) and hit a 409 "phone number already exists". Seven digits from the
+ * clock + randomness spread runs over 10^8 numbers; newCampusOwner still retries a clash.
+ */
+const quotaMobile = () => `034${randomInt(0, 10)}${String((Date.now() + randomInt(0, 10_000_000)) % 10_000_000).padStart(7, '0')}`;
 const randomPassword = () => `Qa!${randomBytes(9).toString('base64url')}9a`;
 const letters = (n: number) => Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz'[randomInt(26)]).join('');
 
@@ -80,7 +85,7 @@ export async function newCampusOwner(label = 'qa538'): Promise<CampusOwner> {
   });
   let reg = await register();
   // A random number can collide with an earlier run's owner (409 "phone number already exists").
-  for (let attempt = 1; reg.status() === 409 && attempt < 3; attempt++) {
+  for (let attempt = 1; reg.status() === 409 && attempt < 6; attempt++) {
     phone = quotaMobile();
     reg = await register();
   }
@@ -123,6 +128,22 @@ export async function newCampusOwner(label = 'qa538'): Promise<CampusOwner> {
     },
   };
   return owner;
+}
+
+export const WEBAPP = process.env.QA_BASE_URL ?? 'https://localhost:7236';
+
+/**
+ * Signs `owner` into the school WebApp through the AuthApp OIDC sign-in. Cycle 1's quota-ui AC1 timed out
+ * in LoginPage.expectLoaded (default 5 s expect) while a cold WASM WebApp was still redirecting, so this
+ * waits up to 60 s for the AuthApp sign-in page before handing over to LoginPage.
+ */
+export async function signInToWebApp(page: Page, owner: CampusOwner) {
+  await page.goto(`${WEBAPP}/`);
+  await page.waitForURL(/\/auth\/login/, { timeout: 60_000 });
+  await expect(page.getByRole('heading', { name: 'Sign in to your account' })).toBeVisible({ timeout: 60_000 });
+  const { identifier, password } = owner.credentials();
+  await new LoginPage(page).signIn(identifier, password);
+  await page.waitForURL((u) => u.origin === new URL(WEBAPP).origin && !u.pathname.startsWith('/authentication'), { timeout: 60_000 });
 }
 
 // ── Back office ──────────────────────────────────────────────────────────────────────────────
@@ -194,6 +215,12 @@ export class BackOffice {
     expect(res.status(), `activate ${subscriptionId}: ${await res.text()}`).toBe(200);
   }
 
+  async customerDetail(subscriptionId: string) {
+    const res = await this.http.get(this.url(`customers/${subscriptionId}`));
+    expect(res.status(), `customer ${subscriptionId}`).toBe(200);
+    return res.json();
+  }
+
   changePlan(subscriptionId: string, planId: string) {
     return this.http.post(this.url(`customers/${subscriptionId}/change-plan`), { data: { planId, reason: 'QA538' } });
   }
@@ -204,7 +231,7 @@ export class BackOffice {
 // ── Mongo ────────────────────────────────────────────────────────────────────────────────────
 
 export async function mongo(script: string): Promise<string> {
-  const { stdout } = await run('npx', ['-y', 'mongosh', MONGO_URL, '--quiet', '--eval', script], { timeout: 120_000 });
+  const { stdout } = await run(...mongoshCommand(MONGO_URL, script), { timeout: 120_000 });
   return stdout.trim();
 }
 const mongoJson = async <T>(expr: string): Promise<T> => JSON.parse(await mongo(`print(EJSON.stringify(${expr}, {relaxed: true}))`)) as T;
@@ -229,6 +256,27 @@ export const quotaDb = {
   async setUsed(tenantId: string, source: 0 | 1, used: number | 'granted') {
     const set = used === 'granted' ? `[{ $set: { Used: '$Granted' } }]` : `{ $set: { Used: ${used} } }`;
     await mongo(`db.quotaallocations.updateMany({TenantId: ${JSON.stringify(tenantId)}, Source: ${source}}, ${set})`);
+  },
+  /**
+   * PRECONDITION WRITE (own campus only): rewrites a top-up request's snapshot ValidityDays, to stand in
+   * for a request created before PR 554 added the 1..3650 bound (cycle-1 B1 legacy data).
+   */
+  async setRequestValidity(requestId: string, validityDays: number) {
+    await mongo(`db.quotatopuprequests.updateOne({_id: ObjectId(${JSON.stringify(requestId)})}, {$set: {ValidityDays: ${validityDays}}})`);
+  },
+  async request(requestId: string): Promise<{ Status: number; ValidityDays: number; PaymentReference: string | null; DecidedAtUtc: unknown } | null> {
+    return mongoJson(`db.quotatopuprequests.findOne({_id: ObjectId(${JSON.stringify(requestId)})})`);
+  },
+  /**
+   * PRECONDITION WRITE (own campus only): makes an Active subscription PastDue (overdue payment) by moving
+   * CurrentPeriodEnd to yesterday. EffectiveStatusCalculator: Status Active + CurrentPeriodEnd < now → PastDue.
+   */
+  async makePastDue(tenantId: string) {
+    await mongo(`db.subscriptions.updateOne({TenantId: ${JSON.stringify(tenantId)}}, {$set: {CurrentPeriodEnd: new Date(Date.now() - 24 * 3600e3)}})`);
+  },
+  /** The campus's notification-preference document, or null when the campus never saved one. */
+  async notificationPreference(tenantId: string): Promise<{ DisabledKinds?: number[]; EnabledKinds?: number[] } | null> {
+    return mongoJson(`db.campusnotificationpreferences.findOne({TenantId: ${JSON.stringify(tenantId)}})`);
   },
   /** PRECONDITION WRITE (own campus only): moves an add-on's expiry, to test consumption order. */
   async setAddOnExpiry(tenantId: string, expiresAt: Date) {
@@ -304,4 +352,10 @@ export const quotaDb = {
 export async function workerLogMentions(text: string): Promise<string[]> {
   const log = await readFile(WORKER_LOG, 'utf8');
   return log.split('\n').filter((l) => l.includes(text));
+}
+
+/** `QA_MONGOSH=/path/to/mongosh` skips `npx -y` (needed inside an offline network namespace). */
+function mongoshCommand(url: string, script: string): [string, string[]] {
+  const bin = process.env.QA_MONGOSH;
+  return bin ? [bin, [url, '--quiet', '--eval', script]] : ['npx', ['-y', 'mongosh', url, '--quiet', '--eval', script]];
 }

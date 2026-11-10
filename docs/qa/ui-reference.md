@@ -186,3 +186,12 @@ Recorded 2026-11-03, PR 550 head 69080e19.
   "Validity (days)" (no name field; name defaults to "N messages"); table Quantity/Price/Validity/Status/Actions ("Edit").
 - /backoffice/quota-requests: filter tabs All/Requested/Approved/Rejected; table Campus/Quantity/Price/Requested/Status/Actions; row buttons
   "Approve" (dialog "Approve quota request": "Approve 100 messages for <Campus> (PKR 100)?", textbox "Payment reference (optional)") and "Reject".
+
+### WhatsApp quota — changes seen in cycle 2 (PR 554 @16342ee3, 2026-11-10)
+- Request-quota modal: radio label is now the package **name** (fallback "N messages"); select by id `quota-package-{packageId}`.
+- Back office → Quota packages modal: new "Package name" textbox (placeholder "e.g. Parent Alerts Pack"); validity error "Validity must be between 1 and 3650 days.".
+- Back office → Plans modal: quota error "Enter a whole number between 0 and 2,147,483,647.".
+- Back office → Quota requests (Approved): new "Payment reference" column ("—" when empty). Customer detail: "WhatsApp quota" card.
+- Shell alert text: "WhatsApp quota exhausted." (+ " — N messages not sent this month." only when skips > 0); re-read on page navigation.
+- Pricing page `/subscription/plan`: "100 WhatsApp notifications / month" + "Available on the paid subscription, after the trial.".
+- Campus Settings → "WhatsApp notifications": toggles still default ON; no paid-credits notice (cycle-2 NB1/NB5).

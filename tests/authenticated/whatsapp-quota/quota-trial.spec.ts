@@ -3,7 +3,7 @@
  * Self-seeding: a fresh owner + trial campus per file.
  */
 import { test, expect } from '@playwright/test';
-import { BackOffice, newCampusOwner, type CampusOwner, type QuotaPackageRow } from '../../../fixtures/quota';
+import { AUTH_APP, BackOffice, newCampusOwner, type CampusOwner, type QuotaPackageRow } from '../../../fixtures/quota';
 
 let owner: CampusOwner;
 let ops: BackOffice;
@@ -49,4 +49,18 @@ test('top-up request validation: empty package id is a validation problem', asyn
   const res = await owner.api.post('subscription/quota/requests', { data: { packageId: '' } });
   expect(res.status()).toBe(400);
   expect((await res.json()).errors).toHaveProperty('PackageId');
+});
+
+test('S2 z94x8ebv10: the plan / pricing page shows the monthly WhatsApp allowance', async ({ browser }) => {
+  const session = await owner.authAppSession();
+  const page = await browser.newPage({ ignoreHTTPSErrors: true, storageState: await session.storageState() });
+  try {
+    await page.goto(`${AUTH_APP}/subscription/plan`);
+    await expect(page.getByText('100 WhatsApp notifications / month')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Available on the paid subscription, after the trial.')).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath('s2-pricing-whatsapp-allowance.png'), fullPage: true });
+  } finally {
+    await page.close();
+    await session.dispose();
+  }
 });

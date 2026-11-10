@@ -42,11 +42,19 @@ export class SubscriptionQuotaCard {
     return { included: read('Included this month'), extra: read('Extra \\(purchased add-ons\\)'), used: read('Used'), remaining: read('Remaining') };
   }
 
-  /** Card button → modal → pick the package by its "N messages" label → bank details → submit → Done. */
-  async requestPackage(messages: number) {
+  /**
+   * Card button → modal → pick the package → bank details → submit → Done.
+   * Since PR 554 the radio's label is the package NAME (title-cased) and "N messages · Valid D days" is its
+   * description, so pass the package row (picked by its radio id `quota-package-{id}`), or a message
+   * count for an unnamed package.
+   */
+  async requestPackage(pkg: { id: string } | number) {
     await this.requestButton().click();
     await expect(this.modal).toBeVisible();
-    await this.modal.getByRole('radio', { name: `${messages.toLocaleString('en-US')} messages` }).first().check();
+    const radio = typeof pkg === 'number'
+      ? this.modal.getByRole('radio', { name: `${pkg.toLocaleString('en-US')} messages` }).first()
+      : this.modal.locator(`[id="quota-package-${pkg.id}"]`);
+    await radio.check();
     await this.modal.getByRole('button', { name: 'Continue' }).click();
     await expect(this.modal.getByRole('heading', { name: 'Bank transfer details' })).toBeVisible();
     await this.modal.getByRole('button', { name: 'Submit request' }).click();
