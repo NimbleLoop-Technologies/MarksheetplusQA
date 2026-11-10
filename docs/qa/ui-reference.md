@@ -155,3 +155,45 @@ Recorded 2026-11-03, PR 550 head 69080e19.
 - A child linked as **new** a moment ago can show as "Child" until the school's profile snapshot is
   projected (a few seconds); the dashboard does not refresh itself.
 - account menu button "Account menu" → links "Family Info", "Logout"
+
+## WhatsApp quota (PR 538 + fixes PR 554 @ b52eeae6; passed QA 2026-11-10, local stack)
+
+### WebApp /setup/subscription → "WhatsApp messages" card — `pages/setup/SubscriptionQuotaCard.ts`
+- Card scope `[data-quota-card]` (no landmark); heading "WhatsApp messages". Skeleton while loading: `[data-quota-loading]`.
+- Trial: `[data-quota-trial]` status "WhatsApp notifications are not available on trial plans."; no button.
+- Not entitled (PastDue/Deactivated): `[data-quota-not-entitled]` "WhatsApp notifications are not available for your current subscription."
+- Active: description list `[data-quota-stats]` — "Included this month", "Extra (purchased add-ons)", "Used", "Remaining" (N0 numbers);
+  `[data-quota-skipped]` "N messages could not be sent this month because the quota was exhausted." (only when N > 0);
+  "Monthly quota resets on 01 Dec 2026." (`[data-quota-resets]`); heading "Purchased add-ons" + table Messages/Used/Expires when add-ons are live;
+  `[data-quota-pending]` "A request for 150 messages (Rs 120) is pending approval." replaces the button; else button "Request extra quota" (setup Edit only).
+- Modal: dialog "Request extra WhatsApp quota" (`#request-quota-modal`): one radio per package, labelled with the package **name** (fallback "N messages"),
+  id `quota-package-{packageId}` (description "Valid 90 days", price "Rs 100") → button "Continue" → heading "Bank transfer details"
+  (Bank / Account title / Account number / IBAN) → button "Submit request" → "Request submitted" → button "Done".
+  Errors stay inline: alert "Request not submitted" + server message (409 → "You already have a pending quota request…").
+- Pricing page `/subscription/plan`: "100 WhatsApp notifications / month" + "Available on the paid subscription, after the trial.".
+
+### WebApp /setup/campus-settings → "WhatsApp notifications" (h2) — `pages/setup/CampusNotificationSettings.ts`
+- Inline Info alert `[data-notifications-paid-note]` titled "WhatsApp credits are paid" above the toggles (a note, never a confirm dialog).
+- checkbox "Result published", checkbox "Fee dues", caption "On"/"Off". Both default **Off** (opt-in) for new and existing campuses.
+  Each saves on change: PUT campus/notification-preferences `{disabledKinds:[…]}`; the server stores the complement as `EnabledKinds`
+  (and drops the legacy `DisabledKinds`). Toast "WhatsApp notifications updated".
+
+### WebApp shell notice — `pages/setup/QuotaShellNotice.ts`
+- `[data-whatsapp-quota-notice]`: "WhatsApp quota exhausted." (+ " — N messages not sent this month." only when skips > 0) + link "Request extra quota"
+  (→ /setup/subscription, perm setup Edit). No close button. Shows as soon as Remaining reaches 0 (campus that had credit), re-read on in-app navigation.
+  A 0-message plan shows it only after a message was actually skipped for quota.
+- Known limitation (PO-accepted): `GET subscription/quota` lags up to 60 s after activation (entitlement cache); no false banner.
+
+### AuthApp back office (https://localhost:7104/backoffice) — operator = admin@marksheetplus.com (linked on register)
+- Nav links: "Dashboard", "Pending payments", "Customers", "Plans", "Quota packages", "Quota requests", "Settings".
+- /backoffice/plans — `pages/backoffice/BackOfficePlansPage.ts`: heading "Plans" (h1), button "New plan"; column "Monthly quotas"
+  ("WhatsApp messages / month: 100"). Modal dialog "New plan"/"Edit plan" (`#plan-modal`): textbox "Plan name", spinbutton "Price (PKR)",
+  combobox "Billing cycle", spinbutton "Trial days", spinbutton "WhatsApp messages / month" (error "Enter a whole number between 0 and 2,147,483,647."),
+  textbox "Features (one per line)", (edit: "Archived"), buttons "Create"/"Save".
+- /backoffice/quota-packages: heading "Quota packages", button "New package"; dialog "New package": textbox "Package name" (placeholder "e.g. Parent Alerts Pack"),
+  spinbutton "Quantity (messages)", "Price (PKR)", "Validity (days)" (error "Validity must be between 1 and 3650 days."); table Quantity/Price/Validity/Status/Actions ("Edit").
+- /backoffice/quota-requests: filter tabs All/Requested/Approved/Rejected; table Campus/Quantity/Price/Requested/Status/Actions (Approved adds "Payment reference", "—" when empty);
+  row buttons "Approve" (dialog "Approve quota request": "Approve 100 messages for <Campus> (PKR 100)?", textbox "Payment reference (optional)") and "Reject".
+- Customer detail: "WhatsApp quota" card. Malformed or unknown ids on /backoffice/api/* → 404.
+- Missing AuthApp / back-office pages (browser GET): 404 with the plain "Not Found — Sorry, the content you are looking for does not exist." page;
+  API / JSON / POST requests keep their own status with an empty body.
