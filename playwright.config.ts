@@ -49,8 +49,8 @@ export default defineConfig({
     {
       name: 'authenticated',
       testDir: './tests/authenticated',
-      // shell-notes has its own project (serial privacy flow, no retries).
-      testIgnore: /shell-notes\//,
+      // shell-notes and whatsapp-quota have their own projects (whatsapp-quota self-seeds; no .auth/user.json).
+      testIgnore: [/shell-notes\//, /whatsapp-quota\//],
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
@@ -69,6 +69,17 @@ export default defineConfig({
         storageState: path.join(__dirname, '.auth', 'user.json'),
       },
       dependencies: ['setup'],
+    },
+    {
+      // PR 538 WhatsApp quota. Self-seeding: each spec registers a throwaway owner + campus via the
+      // AuthApp/RestApi and signs the back-office operator in from QA_BACKOFFICE_EMAIL/PASSWORD.
+      // Local stack only (Mongo preconditions, worker log). Run with --workers=1.
+      name: 'whatsapp-quota',
+      testDir: './tests/authenticated/whatsapp-quota',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 10 * 60_000,
+      use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'family-setup',
