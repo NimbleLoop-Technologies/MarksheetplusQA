@@ -1,13 +1,15 @@
 /**
  * PR 538 / CU-z94x8e7hp4 — back-office quota API: permissions, validation (AC2, AC7) and error handling.
+ * Cycle 3 (b52eeae6): B5 follow-up z94x8ebv0r (customer / plan routes), z94x8ecp98 (AuthApp Not Found page),
+ * B9 storage is opt-in (EnabledKinds, z94x8ecp90).
  * Cycle 2 (PR 554 fixes): the cycle-1 bug repros now assert the FIXED behaviour —
  *   B1 z94x8ebv0m validity bound + legacy request, B5 z94x8ebv0r malformed ids, B6 z94x8ebv0t real 403/404,
  *   B7 z94x8ebv0u blank name, B8 z94x8ebv0w unknown resource, B9 z94x8ebv0w prefs validation,
  *   S1 z94x8ebv0z customer quota, S4 z94x8ebv13 payment reference, Q4 z94x8ebv8g PastDue approval.
  * Independent tests; each creates what it needs (packages are archived, plans archived afterwards).
  */
-import { test, expect } from '@playwright/test';
-import { AUTH_APP, BackOffice, newCampusOwner, quotaDb, type CampusOwner } from '../../../fixtures/quota';
+import { test, expect, type APIRequestContext } from '@playwright/test';
+import { AUTH_APP, BackOffice, evidencePath, newCampusOwner, quotaDb, type CampusOwner } from '../../../fixtures/quota';
 
 let ops: BackOffice;
 let ownerPromise: Promise<CampusOwner> | undefined;
@@ -60,20 +62,66 @@ test.describe('permissions', () => {
     }
   });
 
-  test('B6 z94x8ebv0t side effect: a browser GET of a missing AuthApp page still renders the not-found page', async ({ browser }) => {
-    // PR 554 moved UseStatusCodePagesWithReExecute("/not-found") inside a UseWhen(GET + Accept text/html) branch.
-    // /not-found itself renders (200), but an unknown path now answers 404 with an EMPTY body (blank page).
+  test('z94x8ecp98 (B6 side effect): a browser GET of a missing AuthApp page renders the Not Found page with 404', async ({ browser }) => {
+    // Cycle 2 NB3: PR 554 moved the re-execute into a UseWhen branch and missing pages answered 404 with an EMPTY
+    // body. b52eeae6 keeps UseStatusCodePagesWithReExecute("/not-found") on the main pipeline and switches it off
+    // per request for anything that is not a browser page load.
     const page = await browser.newPage({ ignoreHTTPSErrors: true });
     try {
-      const notFound = await page.goto(`${AUTH_APP}/not-found`);
-      expect(notFound?.status()).toBe(200);
-      const expected = (await page.locator('body').innerText()).trim();
-      expect(expected.length, 'the /not-found page has content').toBeGreaterThan(0);
-      for (const path of ['/definitely-missing-page', '/backoffice/definitely-missing']) {
+      for (const path of ['/does-not-exist', '/definitely-missing-page', '/backoffice/does-not-exist', '/backoffice/definitely/missing/deep']) {
         const res = await page.goto(`${AUTH_APP}${path}`);
         expect(res?.status(), path).toBe(404);
-        await expect(page.locator('body'), `${path} renders the not-found page, not a blank page`).toContainText(expected.split('\n')[0]);
+        expect((await res!.headers())['content-type'] ?? '', path).toContain('text/html');
+        await expect(page.getByRole('heading', { name: 'Not Found' }), `${path} renders the Not Found page, not a blank page`).toBeVisible();
+        await expect(page.getByText('Sorry, the content you are looking for does not exist.')).toBeVisible();
+        expect((await page.locator('body').innerText()).trim().length, `${path} body is not empty`).toBeGreaterThan(0);
       }
+      await page.screenshot({ path: evidencePath('c3-ecp98-backoffice-missing-page-not-found.png'), fullPage: true });
+      await page.goto(`${AUTH_APP}/does-not-exist`);
+      await page.screenshot({ path: evidencePath('c3-ecp98-root-missing-page-not-found.png'), fullPage: true });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('z94x8ecp98: API calls and POSTs to a missing path keep their own status and get no HTML page', async ({ playwright }) => {
+    const anon = await playwright.request.newContext({ ignoreHTTPSErrors: true });
+    try {
+      const html = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+      const cases: Array<[string, () => ReturnType<typeof anon.get>]> = [
+        ['GET /does-not-exist Accept json', () => anon.get(`${AUTH_APP}/does-not-exist`, { headers: { Accept: 'application/json' } })],
+        ['GET /does-not-exist Accept html+json', () => anon.get(`${AUTH_APP}/does-not-exist`, { headers: { Accept: 'text/html, application/json' } })],
+        ['GET /backoffice/api/does-not-exist Accept html', () => anon.get(`${AUTH_APP}/backoffice/api/does-not-exist`, { headers: { Accept: html }, maxRedirects: 0 })],
+        ['POST /does-not-exist Accept html', () => anon.post(`${AUTH_APP}/does-not-exist`, { headers: { Accept: html }, data: {} })],
+      ];
+      for (const [label, call] of cases) {
+        const res = await call();
+        const body = await res.text();
+        expect(res.status(), label).toBeGreaterThanOrEqual(400);
+        expect(body, `${label} → ${res.status()} must not be the Not Found HTML page`).not.toContain('Sorry, the content you are looking for does not exist.');
+        expect(res.headers()['content-type'] ?? '', label).not.toContain('text/html');
+      }
+    } finally {
+      await anon.dispose();
+    }
+    // Back-office API: an operator's API 404 is still the endpoint's own 404 (not the page).
+    const res = await ops.http.get(ops.url('customers/000000000000000000000000'), { headers: { Accept: 'text/html,application/xhtml+xml' } });
+    expect(res.status()).toBe(404);
+    expect(await res.text()).not.toContain('Sorry, the content you are looking for does not exist.');
+  });
+
+  test('z94x8ecp98: a back-office customer page route with a malformed id is not a 500 or a blank page', async ({ browser }) => {
+    // /backoffice/customers/{Id} IS a page route (CustomerDetail.razor), so it renders the page shell (200) and
+    // the page's own API call answers 404. Recorded, not asserted as a Not Found page.
+    const page = await browser.newPage({ ignoreHTTPSErrors: true, storageState: await ops.storageState() });
+    try {
+      const res = await page.goto(`${AUTH_APP}/backoffice/customers/not-an-id`);
+      expect(res?.status(), 'page route').toBeLessThan(500);
+      await page.waitForLoadState('networkidle').catch(() => undefined);
+      expect((await page.locator('body').innerText()).trim().length).toBeGreaterThan(0);
+      test.info().annotations.push({ type: 'observation', description: `/backoffice/customers/not-an-id → ${res?.status()}; body starts "${(await page.locator('main, body').first().innerText()).trim().slice(0, 160).replace(/\s+/g, ' ')}"` });
+      console.log(test.info().annotations.at(-1)?.description);
+      await page.screenshot({ path: evidencePath('c3-ecp98-backoffice-customer-page-malformed-id.png'), fullPage: true });
     } finally {
       await page.close();
     }
@@ -229,21 +277,51 @@ test.describe('quota requests', () => {
     expect([approve.status(), reject.status(), update.status()]).toEqual([404, 404, 404]);
   });
 
-  // B5 follow-up (cycle 2): the other back-office {id} routes still throw FormatException → 500.
-  for (const [label, call] of [
-    ['GET customers/{id}', (o: BackOffice) => o.http.get(o.url('customers/not-an-id'))],
-    ['POST customers/{id}/activate', (o: BackOffice) => o.http.post(o.url('customers/not-an-id/activate'), { data: {} })],
-    ['POST customers/{id}/extend', (o: BackOffice) => o.http.post(o.url('customers/not-an-id/extend'), { data: { days: 1, reason: 'x' } })],
-    ['POST customers/{id}/deactivate', (o: BackOffice) => o.http.post(o.url('customers/not-an-id/deactivate'), { data: { reason: 'x' } })],
-    ['POST customers/{id}/reactivate', (o: BackOffice) => o.http.post(o.url('customers/not-an-id/reactivate'), { data: { reason: 'x' } })],
-    ['POST customers/{id}/change-plan', (o: BackOffice) => o.http.post(o.url('customers/not-an-id/change-plan'), { data: { planId: 'not-an-id', reason: 'x' } })],
-    ['PUT plans/{id}', (o: BackOffice) => o.http.put(o.url('plans/not-an-id'), { data: { name: 'QA538 never', price: 1, cycle: 'Monthly', trialDays: 1, features: [], isArchived: false } })],
-  ] as const) {
-    test(`B5 follow-up: a malformed id on ${label} is a client error, not a 500`, async () => {
-      const res = await call(ops);
-      expect([400, 404], `${label} → ${res.status()} ${await res.text()}`).toContain(res.status());
+  // B5 follow-up, z94x8ebv0r (cycle 3, b52eeae6): the subscription and plan lookups now treat a non-ObjectId
+  // as "not found". Every route gets a VALID body, so a 400 for a missing/invalid body cannot mask a 500.
+  const VALID_PLAN = { name: 'QA538 never', price: 1, cycle: 'Monthly', trialDays: 1, features: [], isArchived: false, quotas: [{ resource: 0, granted: 100 }] };
+  for (const bad of ['not-an-id', '123', 'zzzzzzzzzzzzzzzzzzzzzzzz', '6af2aa050404c5f70f27f33' /* 23 hex */]) {
+    test(`B5 z94x8ebv0r: malformed id "${bad}" on the customer and plan routes is 404/400, never 500`, async () => {
+      const id = encodeURIComponent(bad);
+      const calls: Array<[string, () => ReturnType<APIRequestContext['get']>]> = [
+        ['GET customers/{id}', () => ops.http.get(ops.url(`customers/${id}`))],
+        ['POST customers/{id}/activate', () => ops.http.post(ops.url(`customers/${id}/activate`), { data: {} })],
+        ['POST customers/{id}/extend', () => ops.http.post(ops.url(`customers/${id}/extend`), { data: { days: 1, reason: 'QA538' } })],
+        ['POST customers/{id}/deactivate', () => ops.http.post(ops.url(`customers/${id}/deactivate`), { data: { reason: 'QA538' } })],
+        ['POST customers/{id}/reactivate', () => ops.http.post(ops.url(`customers/${id}/reactivate`), { data: { reason: 'QA538' } })],
+        ['POST customers/{id}/change-plan', () => ops.http.post(ops.url(`customers/${id}/change-plan`), { data: { planId: '000000000000000000000000', reason: 'QA538' } })],
+        ['PUT plans/{id}', () => ops.http.put(ops.url(`plans/${id}`), { data: VALID_PLAN })],
+      ];
+      const seen: string[] = [];
+      for (const [label, call] of calls) {
+        const res = await call();
+        seen.push(`${label} → ${res.status()}`);
+        expect.soft([400, 404], `${label} → ${res.status()} ${(await res.text()).slice(0, 200)}`).toContain(res.status());
+      }
+      test.info().annotations.push({ type: 'statuses', description: seen.join('; ') });
+      console.log(`[statuses ${bad}] ${seen.join('; ')}`);
+      expect((await ops.plans()).some((p) => p.name === 'QA538 never'), 'no plan was created or renamed').toBe(false);
     });
   }
+
+  test('B5 z94x8ebv0r: a malformed planId in a change-plan body on a REAL subscription is 404/400, and the plan is unchanged', async () => {
+    const campus = await campusOwner();
+    const subId = await quotaDb.subscriptionId(campus.tenantId);
+    const before = await ops.customerDetail(subId);
+    const res = await ops.changePlan(subId, 'not-an-id');
+    expect([400, 404], `${res.status()} ${await res.text()}`).toContain(res.status());
+    expect((await ops.customerDetail(subId)).planId).toBe(before.planId);
+  });
+
+  test('B5 z94x8ebv0r positive control: a valid PUT plans/{id} on a real (QA538) plan still saves', async () => {
+    const name = uniquePlanName();
+    expect((await ops.createPlan({ name, price: 1, cycle: 'Monthly', trialDays: 1, features: [], quotas: [{ resource: 0, granted: 100 }] })).status()).toBe(200);
+    const plan = (await ops.plans()).find((p) => p.name === name)!;
+    createdPlanIds.push(plan.id);
+    const res = await ops.updatePlan(plan.id, { ...VALID_PLAN, name, quotas: [{ resource: 0, granted: 120 }] });
+    expect(res.status(), await res.text()).toBe(200);
+    expect((await ops.plans()).find((p) => p.id === plan.id)?.quotas[0].granted).toBe(120);
+  });
 
   test('S4 z94x8ebv13: the approved list shows the payment reference the operator entered', async () => {
     const campus = await campusOwner();
@@ -394,9 +472,15 @@ test.describe('notification preferences API (AC8, AC9)', () => {
     const owner = await campusOwner();
     const res = await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [2, 2] } });
     expect(res.status(), await res.text()).toBe(200);
-    expect((await quotaDb.notificationPreference(owner.tenantId))?.DisabledKinds).toEqual([2]);
+    // Opt-in storage since b52eeae6 (z94x8ecp90): the request still names the OFF kinds; the document stores
+    // the complement as EnabledKinds and carries no DisabledKinds.
+    const doc = await quotaDb.notificationPreference(owner.tenantId);
+    expect(doc?.EnabledKinds).toEqual([1]);
+    expect(doc).not.toHaveProperty('DisabledKinds');
     const items = (await (await owner.api.get('campus/notification-preferences')).json()).items;
     expect(items.map((i: { kind: number; enabled: boolean }) => [i.kind, i.enabled])).toEqual([[1, true], [2, false]]);
-    await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [] } });
+    // Leave the campus OFF again (the default).
+    expect((await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [1, 2] } })).status()).toBe(200);
+    expect((await quotaDb.notificationPreference(owner.tenantId))?.EnabledKinds).toEqual([]);
   });
 });

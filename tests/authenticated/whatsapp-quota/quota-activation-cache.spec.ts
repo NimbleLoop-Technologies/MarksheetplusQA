@@ -1,6 +1,12 @@
 /**
  * PR 538 cycle-1 B2 (not filed as a subtask) — 60 s entitlement cache after activation.
  *
+ * Cycle 3 (b52eeae6): the PO accepted the 60 s activation-cache lag as a KNOWN LIMITATION. Since the
+ * z94x8ecp9c fix, GetQuotaStatus only reports "exhausted" when the campus had credit or a message was skipped,
+ * so the cached "Trialing" balance (included 0) no longer turns the shell alert on: the false banner is gone and
+ * stays asserted. The Subscription summary (GET subscription/quota) can still show included 0 / remaining 0 for
+ * up to 60 s; that lag is recorded as a `known-limitation` annotation, not a failure.
+ *
  * PR 554 made GET subscription/quota/status check the subscription FRESH, but QuotaManager.GetBalanceAsync
  * still reads the entitlement through the 60 s cache (quota-entitlement:{tenant}:{resource}). Before the
  * month's first send there is no plan allocation document, so a cached "Trialing" entitlement makes the
@@ -29,7 +35,7 @@ test.afterAll(async () => {
   for (const o of owners) await o.api.dispose();
 });
 
-test('B2: a campus that just got activated sees its plan allowance at once (not "0 remaining, exhausted")', async () => {
+test('B2 (known limitation): right after activation the alert status is not exhausted; the summary catches up within 60 s', async () => {
   const owner = await newCampusOwner();
   owners.push(owner);
   // The owner looks at the quota while still on trial (this primes the entitlement cache)...
@@ -43,7 +49,14 @@ test('B2: a campus that just got activated sees its plan allowance at once (not 
   const elapsed = Math.round((Date.now() - activatedAt) / 1000);
   expect(quota.isEntitled).toBe(true);
   expect(status, `layout status ${elapsed}s after activation (drives the shell alert)`).toEqual({ isExhausted: false, skippedThisMonth: 0 });
-  expect(quota, `summary ${elapsed}s after activation`).toMatchObject({ included: 100, remaining: 100, isExhausted: false });
+  if (quota.included !== 100) {
+    { const a = {
+      type: 'known-limitation',
+      description: `PO-accepted 60 s activation cache: summary ${elapsed}s after activation = included ${quota.included}, remaining ${quota.remaining}, isExhausted ${quota.isExhausted}`,
+    }; test.info().annotations.push(a); console.log(`[${a.type}] ${a.description}`); }
+  }
+  // Within the accepted window the summary catches up.
+  await expect.poll(async () => (await (await owner.api.get('subscription/quota')).json()).included, { timeout: 90_000, intervals: [5_000] }).toBe(100);
 });
 
 test('B2: the owner does not get a false "WhatsApp quota exhausted" banner right after activation', async ({ page }) => {

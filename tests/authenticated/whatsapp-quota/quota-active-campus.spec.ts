@@ -103,7 +103,8 @@ test('an archived package is hidden from campuses and cannot be requested (400)'
 });
 
 test('AC9: disabling "Fee dues" skips fee WhatsApps with DisabledByCampus; results still send', async () => {
-  // Default-agnostic: the default (required OFF since 2026-11-10) is covered by notifications-default-off.spec.ts.
+  // Opt-in since b52eeae6 (z94x8ecp90; default OFF is covered by notifications-default-off.spec.ts): the request
+  // names the kinds left OFF, so this save switches Result published ON and leaves Fee dues OFF.
   expect((await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [WA_KIND.PendingDues] } })).status()).toBe(200);
   const after = await (await owner.api.get('campus/notification-preferences')).json();
   expect(after.items.find((i: { kind: number }) => i.kind === WA_KIND.PendingDues).enabled).toBe(false);

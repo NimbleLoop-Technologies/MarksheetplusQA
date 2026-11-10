@@ -13,10 +13,11 @@
  * RestApi /auth/login persona 1).
  */
 import { execFile } from 'node:child_process';
+import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { createHash, randomBytes, randomInt } from 'node:crypto';
-import { expect, request as pwRequest, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, request as pwRequest, type APIRequestContext, type Page } from '@playwright/test';
 import { LoginPage } from '../pages/LoginPage';
 
 const run = promisify(execFile);
@@ -28,6 +29,12 @@ const MONGO_URL = process.env.QA_MONGO_URL ?? 'mongodb://localhost:27017/mp-acco
 const WORKER_LOG = process.env.QA_WORKER_LOG || '/workspace/devenv/worker.log';
 
 const ctx = () => pwRequest.newContext({ ignoreHTTPSErrors: true });
+
+/**
+ * Where a spec saves a named screenshot: `QA_EVIDENCE_DIR/<name>` when set (the cycle's evidence folder),
+ * otherwise the test's own output folder.
+ */
+export const evidencePath = (name: string) => (process.env.QA_EVIDENCE_DIR ? join(process.env.QA_EVIDENCE_DIR, name) : test.info().outputPath(name));
 
 /**
  * Throwaway 034x mobile for these specs. Cycle 1 used 03{40-49}538xxxx (10^5 numbers, ~20 owners per run,
@@ -273,6 +280,20 @@ export const quotaDb = {
    */
   async makePastDue(tenantId: string) {
     await mongo(`db.subscriptions.updateOne({TenantId: ${JSON.stringify(tenantId)}}, {$set: {CurrentPeriodEnd: new Date(Date.now() - 24 * 3600e3)}})`);
+  },
+  /**
+   * PRECONDITION WRITE (own campus only): inserts a notification-preference document in the shape the
+   * pre-opt-in build wrote (only the opt-out list `DisabledKinds`, no `EnabledKinds`), to stand in for an
+   * EXISTING campus at release. `DisabledKinds: []` meant "every kind on" in the old model.
+   */
+  async insertLegacyPreference(tenantId: string, disabledKinds: number[] = []) {
+    const t = JSON.stringify(tenantId);
+    await mongo(`db.campusnotificationpreferences.insertOne({ _id: new ObjectId(), TenantId: ${t}, DisabledKinds: ${JSON.stringify(disabledKinds)},
+      CreatedBy: 'qa538-legacy', CreatedDate: new Date(), ModifiedBy: 'qa538-legacy', ModifiedDate: new Date() })`);
+  },
+  /** Sum of Used over every allocation of the campus (credits charged). */
+  async creditsUsed(tenantId: string): Promise<number> {
+    return (await quotaDb.allocations(tenantId)).reduce((n, a) => n + a.Used, 0);
   },
   /** The campus's notification-preference document, or null when the campus never saved one. */
   async notificationPreference(tenantId: string): Promise<{ DisabledKinds?: number[]; EnabledKinds?: number[] } | null> {

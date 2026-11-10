@@ -195,3 +195,8 @@ Recorded 2026-11-03, PR 550 head 69080e19.
 - Shell alert text: "WhatsApp quota exhausted." (+ " — N messages not sent this month." only when skips > 0); re-read on page navigation.
 - Pricing page `/subscription/plan`: "100 WhatsApp notifications / month" + "Available on the paid subscription, after the trial.".
 - Campus Settings → "WhatsApp notifications": toggles still default ON; no paid-credits notice (cycle-2 NB1/NB5).
+
+### PR 538 cycle 3 notes (PR 554 @ b52eeae6)
+- Campus Settings → "WhatsApp notifications": both toggles default **Off** (opt-in, `EnabledKinds`); inline Info alert `[data-notifications-paid-note]` titled "WhatsApp credits are paid" above the toggles (no confirm dialog). Saving shows toast "WhatsApp notifications updated".
+- AuthApp / back-office missing pages: 404 with the plain "Not Found — Sorry, the content you are looking for does not exist." page; API / JSON / POST requests keep their empty status response.
+- 0-message plan: no shell alert until a message is actually skipped for quota.
