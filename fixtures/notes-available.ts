@@ -4,6 +4,8 @@ import { expect, type Page, test } from '@playwright/test';
 export async function notesUiPresent(page: Page): Promise<boolean> {
   await page.goto('/');
   await expect(page.locator('body')).toBeVisible({ timeout: 30_000 });
+  // Wait for the WASM shell header to render before counting (otherwise the check races and skips).
+  await page.getByRole('button', { name: /^(Open user menu|More options)$/ }).first().waitFor({ timeout: 30_000 }).catch(() => {});
   return (await page.getByRole('button', { name: /^Notes$/i }).count()) > 0;
 }
 
