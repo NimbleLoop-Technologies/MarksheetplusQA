@@ -50,7 +50,7 @@ export default defineConfig({
       name: 'authenticated',
       testDir: './tests/authenticated',
       // shell-notes and whatsapp-quota have their own projects (whatsapp-quota self-seeds; no .auth/user.json).
-      testIgnore: [/shell-notes\//, /whatsapp-quota\//],
+      testIgnore: [/shell-notes\//, /whatsapp-quota\//, /challan-name\//],
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
@@ -79,6 +79,18 @@ export default defineConfig({
       fullyParallel: false,
       retries: 0,
       timeout: 10 * 60_000,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      // PR 547 (ClickUp z94x8eapp5) challans under family or student name. Self-seeding: each spec file
+      // registers its own throwaway owner + trial campus (fixtures/campus-owner.ts) and waits for the
+      // Worker's 1-minute challan scheduler. Local stack only (netns qa555, psql). Run with --workers=1.
+      name: 'challan-name',
+      testDir: './tests/authenticated/challan-name',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 12 * 60_000,
+      expect: { timeout: 15_000 },
       use: { ...devices['Desktop Chrome'] },
     },
     {

@@ -7,7 +7,12 @@
 **Endpoints / use cases:** Fee policy CRUD/archive/restore/duplicate, CheckClassPolicyConflict, additional funds, GetPendingFeeChallans, ReceiveFeePayment, GetFeePaymentReceipt, GetFamilyChallanPrint, GetFamilyLedger, GetFamilyOutstanding(+BookshopBill), GetFeeDashboard, GetFeeDefaulters(Page); Worker GenerateFeeChallansScheduler
 
 ## Business rules & known risk areas
-- Challans generated monthly per family (or per student — z94x8eapp5 in review)
+- Challans generated monthly per family, or per student when the school (root) policy's "Challan name"
+  switch (`GenerateChallansPerStudent`, z94x8eapp5 / PR 547) is on. Class policies inherit it. The mode is
+  snapshotted per challan (`FeeChallans.GenerateChallansPerStudent`); issued cycles never regroup.
+  Student scope = `?challanId=` on outstanding / payments / `challan-prints`; family scope (no challanId) =
+  combined challans only, plus a `StudentChallans` list ("Billed per student" card). Bookshop purchases follow
+  `BookshopRouting`. Specs: `tests/authenticated/challan-name/*` (project `challan-name`, local stack).
 - New student's challan must merge into existing family challan (z94x8e91q4)
 - Blocked/deactivated campuses excluded (z94x8e32e3)
 - Carried-forward lines must appear in statement AND payment section (z94x8eavkw)
