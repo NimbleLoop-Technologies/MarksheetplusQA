@@ -470,7 +470,8 @@ test.describe('notification preferences API (AC8, AC9)', () => {
 
   test('B9 z94x8ebv0w: a valid save is committed before the 200 (read-after-write sees it) and duplicates collapse', async () => {
     const owner = await campusOwner();
-    const res = await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [2, 2] } });
+    // PR 555 added Fee receipt (6): the request names every OFF kind, as the three-toggle page does.
+    const res = await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [2, 2, 6] } });
     expect(res.status(), await res.text()).toBe(200);
     // Opt-in storage since b52eeae6 (z94x8ecp90): the request still names the OFF kinds; the document stores
     // the complement as EnabledKinds and carries no DisabledKinds.
@@ -478,9 +479,9 @@ test.describe('notification preferences API (AC8, AC9)', () => {
     expect(doc?.EnabledKinds).toEqual([1]);
     expect(doc).not.toHaveProperty('DisabledKinds');
     const items = (await (await owner.api.get('campus/notification-preferences')).json()).items;
-    expect(items.map((i: { kind: number; enabled: boolean }) => [i.kind, i.enabled])).toEqual([[1, true], [2, false]]);
+    expect(items.map((i: { kind: number; enabled: boolean }) => [i.kind, i.enabled])).toEqual([[1, true], [6, false], [2, false]]);
     // Leave the campus OFF again (the default).
-    expect((await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [1, 2] } })).status()).toBe(200);
+    expect((await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [1, 2, 6] } })).status()).toBe(200);
     expect((await quotaDb.notificationPreference(owner.tenantId))?.EnabledKinds).toEqual([]);
   });
 });

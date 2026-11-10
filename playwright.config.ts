@@ -49,8 +49,8 @@ export default defineConfig({
     {
       name: 'authenticated',
       testDir: './tests/authenticated',
-      // shell-notes and whatsapp-quota have their own projects (whatsapp-quota self-seeds; no .auth/user.json).
-      testIgnore: [/shell-notes\//, /whatsapp-quota\//],
+      // shell-notes, whatsapp-quota and whatsapp-receipts have their own projects (self-seeding; no .auth/user.json).
+      testIgnore: [/shell-notes\//, /whatsapp-quota\//, /whatsapp-receipts\//],
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
@@ -79,6 +79,17 @@ export default defineConfig({
       fullyParallel: false,
       retries: 0,
       timeout: 10 * 60_000,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      // PR 555 WhatsApp fee receipts. Self-seeding like whatsapp-quota (throwaway owner + campus per file,
+      // back-office operator from QA_BACKOFFICE_EMAIL/PASSWORD), plus fee data through the RestApi and psql
+      // (fixtures/fees.ts) and the Worker's fee scheduler. Local stack only. Run with --workers=1.
+      name: 'whatsapp-receipts',
+      testDir: './tests/authenticated/whatsapp-receipts',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 15 * 60_000,
       use: { ...devices['Desktop Chrome'] },
     },
     {

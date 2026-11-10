@@ -32,3 +32,9 @@ Environment facts and lessons that save time in the next cycle.
   (TailwindUi `TextField`); the password label is visually hidden.
 - Where sign-up lands on integration with OTP off (expected: away from `/auth/register`).
 - The heading role and text on `/students` ("Admission Register" from the breadcrumb).
+
+## WhatsApp fee receipts (PR 555, cycle 1)
+- Project `whatsapp-receipts` self-seeds (throwaway owner, back-office activation, fees via fixtures/fees.ts with ChallanGenerationDay = today UTC so the Worker issues challans in ~1 min). Run --workers=1; flow file takes ~5-6 min.
+- Kind 6 rows live in Mongo `mp-accounts-db.scheduledwhatsappmessages`; the dev fake sender ignores the PDF, so render `MessageJson.Document.Html` with page.setContent to inspect it.
+- Recipient is FatherMobile else MotherMobile (stored normalized +92...); GuardianMobile alone gives no row.
+- Adding a metered kind changes the preference list; whatsapp-quota specs assert the full list in MeteredKinds.All order.

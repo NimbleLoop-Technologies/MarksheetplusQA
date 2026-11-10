@@ -54,7 +54,7 @@ test('AC9: each notification kind has its own toggle and the choice persists', a
   await expect(settings.toggle('Fee dues')).not.toBeChecked();
   await expect(settings.toggle('Result published')).toBeChecked();
   const prefs = await (await owner.api.get('campus/notification-preferences')).json();
-  expect(prefs.items.map((i: { kind: number; enabled: boolean }) => [i.kind, i.enabled])).toEqual([[1, true], [2, false]]);
+  expect(prefs.items.map((i: { kind: number; enabled: boolean }) => [i.kind, i.enabled])).toEqual([[1, true], [6, false], [2, false]]);
   await settings.setEnabled('Fee dues', true);
 });
 

@@ -25,7 +25,8 @@ test.describe.configure({ mode: 'serial' });
 
 const PAID_TITLE = 'WhatsApp credits are paid';
 const PAID_NOTE = /uses one paid credit from your campus's WhatsApp quota\. Notifications stay off until you switch them on/;
-const ALL_OFF = [[WA_KIND.ResultPublished, false], [WA_KIND.PendingDues, false]];
+// Server order (MeteredKinds.All). PR 555 added "Fee receipt" (kind 6) between Result published and Fee dues.
+const ALL_OFF = [[WA_KIND.ResultPublished, false], [WA_KIND.FeePaymentReceipt, false], [WA_KIND.PendingDues, false]];
 
 let fresh: CampusOwner;
 let legacy: CampusOwner;
@@ -137,10 +138,11 @@ test('z94x8ecp94 + z94x8ecp90 (c): switching Result published ON in the UI opens
   const doc = await quotaDb.notificationPreference(fresh.tenantId);
   expect(doc).toMatchObject({ EnabledKinds: [WA_KIND.ResultPublished] });
   expect(doc).not.toHaveProperty('DisabledKinds');
-  expect(await prefs(fresh)).toEqual([[WA_KIND.ResultPublished, true], [WA_KIND.PendingDues, false]]);
+  expect(await prefs(fresh)).toEqual([[WA_KIND.ResultPublished, true], [WA_KIND.FeePaymentReceipt, false], [WA_KIND.PendingDues, false]]);
 
   // The existing campus saves too (the body the page sends: the kinds left OFF); the legacy list is removed.
-  expect((await legacy.api.put('campus/notification-preferences', { data: { disabledKinds: [WA_KIND.PendingDues] } })).status()).toBe(200);
+  // PR 555: the three-toggle page names Fee receipt (6) as OFF too; a 2-kind body would enable it (R2-pr555).
+  expect((await legacy.api.put('campus/notification-preferences', { data: { disabledKinds: [WA_KIND.PendingDues, WA_KIND.FeePaymentReceipt] } })).status()).toBe(200);
   const legacyDoc = await quotaDb.notificationPreference(legacy.tenantId);
   expect(legacyDoc).toMatchObject({ EnabledKinds: [WA_KIND.ResultPublished] });
   expect(legacyDoc, 'first opt-in save drops the legacy DisabledKinds').not.toHaveProperty('DisabledKinds');

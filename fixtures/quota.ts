@@ -247,7 +247,7 @@ export interface AllocationDoc { _id: string; TenantId: string; Source: number; 
 export interface WhatsAppRowDoc { _id: string; Kind: number; DedupeKey: string; Status: number; SkipReason: string | null; QuotaAllocationId: string | null; TenantId: string }
 
 export const WA_STATUS = { Pending: 0, Sending: 1, Sent: 2, Skipped: 3, Failed: 4 } as const;
-export const WA_KIND = { WelcomeTrial: 0, ResultPublished: 1, PendingDues: 2, StaffInvite: 3, ParentLinkInvite: 5 } as const;
+export const WA_KIND = { WelcomeTrial: 0, ResultPublished: 1, PendingDues: 2, StaffInvite: 3, ParentLinkInvite: 5, FeePaymentReceipt: 6 } as const;
 
 export const quotaDb = {
   async subscriptionId(tenantId: string): Promise<string> {
@@ -294,6 +294,16 @@ export const quotaDb = {
   /** Sum of Used over every allocation of the campus (credits charged). */
   async creditsUsed(tenantId: string): Promise<number> {
     return (await quotaDb.allocations(tenantId)).reduce((n, a) => n + a.Used, 0);
+  },
+  /**
+   * PRECONDITION WRITE (own campus only): inserts a notification-preference document in the opt-in shape
+   * saved before PR 555 added Fee receipt (e.g. EnabledKinds [1, 2] = Result + Dues on), to stand in for an
+   * EXISTING campus that had switched notifications on.
+   */
+  async insertOptInPreference(tenantId: string, enabledKinds: number[]) {
+    const t = JSON.stringify(tenantId);
+    await mongo(`db.campusnotificationpreferences.insertOne({ _id: new ObjectId(), TenantId: ${t}, EnabledKinds: ${JSON.stringify(enabledKinds)},
+      CreatedBy: 'qa555-existing', CreatedDate: new Date(), ModifiedBy: 'qa555-existing', ModifiedDate: new Date() })`);
   },
   /** The campus's notification-preference document, or null when the campus never saved one. */
   async notificationPreference(tenantId: string): Promise<{ DisabledKinds?: number[]; EnabledKinds?: number[] } | null> {
