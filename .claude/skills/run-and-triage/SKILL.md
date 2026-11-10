@@ -31,6 +31,10 @@ Read `test-results/results.json`. For each failed test, the `results` array has 
 | Failed every attempt, assertion mismatch | **REAL FAILURE** | Candidate bug. Verify against acceptance criteria before reporting. |
 | Failed every attempt, timeout on every selector | **SELECTOR DRIFT or ENV DOWN** | Check the app is reachable. If up, the UI changed — re-recon and update `docs/qa/ui-reference.md`. Not a product bug. |
 | `setup` project failed | **BLOCKED** | Auth is broken. Everything downstream is meaningless. Report as blocked, not as N failures. |
+| `net::ERR_CONNECTION_TIMED_OUT` / `ERR_NAME_NOT_RESOLVED` | **BLOCKED (env)** | The environment is unreachable from this machine (VPN / IP allow-list / outage). Not a product bug. |
+| `expected to fail` but passed (`test.fail`) | **FIXED?** | A known bug may be fixed. Re-verify, then update `knowledge/known-issues.md` and remove the marker. |
+
+Count **skipped** tests separately and say why they skipped (missing `QA_EMAIL`, `QA_ALLOW_SIGNUP` off). Skipped coverage is untested coverage.
 
 ## Rules
 

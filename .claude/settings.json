@@ -1,6 +1,29 @@
 {
+  "extraKnownMarketplaces": {
+    "marksheetplus-qa": {
+      "source": {
+        "source": "directory",
+        "path": "."
+      }
+    }
+  },
+  "enabledPlugins": {
+    "test-strategy@marksheetplus-qa": true,
+    "functional-testing@marksheetplus-qa": true,
+    "automation@marksheetplus-qa": true,
+    "performance-testing@marksheetplus-qa": true,
+    "api-testing@marksheetplus-qa": true,
+    "quality-metrics@marksheetplus-qa": true,
+    "accessibility-testing@marksheetplus-qa": true,
+    "qa-toolkit@marksheetplus-qa": true
+  },
   "permissions": {
     "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Skill",
+      "mcp__playwright",
       "Bash(npm test:*)",
       "Bash(npm run test:*)",
       "Bash(npm run typecheck)",
@@ -16,7 +39,12 @@
       "Read(./.env)",
       "Read(./.auth/**)",
       "Bash(git add -f:*)",
-      "Bash(git add --force:*)"
+      "Bash(git add --force:*)",
+      "Bash(git push:*)",
+      "Edit(./.claude/settings.json)",
+      "Write(./.claude/settings.json)",
+      "Edit(./.mcp.json)",
+      "Write(./.mcp.json)"
     ]
   },
   "enableAllProjectMcpServers": true

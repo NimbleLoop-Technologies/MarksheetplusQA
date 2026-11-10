@@ -49,8 +49,21 @@ export default defineConfig({
     {
       name: 'authenticated',
       testDir: './tests/authenticated',
-      // whatsapp-quota seeds its own campus/operator sessions (project below); it must not need .auth/user.json.
-      testIgnore: /whatsapp-quota\//,
+      // shell-notes and whatsapp-quota have their own projects (whatsapp-quota self-seeds; no .auth/user.json).
+      testIgnore: [/shell-notes\//, /whatsapp-quota\//],
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: path.join(__dirname, '.auth', 'user.json'),
+      },
+      dependencies: ['setup'],
+    },
+    {
+      // PR 543 shell Notes drawer. Desktop + phone, storage probes, bug repros.
+      // notes-privacy.spec.ts self-seeds a throwaway two-campus owner (local stack).
+      name: 'shell-notes',
+      testDir: './tests/authenticated/shell-notes',
+      retries: 0,
+      timeout: 2 * 60_000,
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
