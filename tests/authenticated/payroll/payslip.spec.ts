@@ -127,6 +127,20 @@ test.describe('Payslip — the modal', () => {
     await page.context().close();
   });
 
+  test('PO decision (t28u): for a Payroll Edit holder the footer offers "Post an adjustment" before "Close"', async ({ browser }) => {
+    const page = await P.openApp(browser, w, P.runPath(w.data.runId));
+    const run = new PayrollRunPage(page);
+    await run.expectPublishedLoaded();
+    await run.rowAction(w.data.bilal.name, 'View payslip').click();
+    await expect(run.dialogButton('Close').first()).toBeVisible();
+    const labels = (await page.getByRole('dialog').getByRole('button').allInnerTexts()).map((t) => t.trim());
+    await P.saveEvidence('payslip-footer-order.txt', JSON.stringify(labels));
+    const adjust = labels.indexOf('Post an adjustment');
+    expect(adjust, `footer actions ${JSON.stringify(labels)}`).toBeGreaterThanOrEqual(0);
+    expect(adjust, 'Post an adjustment comes before Close').toBeLessThan(labels.lastIndexOf('Close'));
+    await page.context().close();
+  });
+
   test('loading and failure: "We could not load this payslip. Check your connection and try again." with a retry inside the modal', async ({ browser }) => {
     const page = await P.openApp(browser, w, P.runPath(w.data.runId));
     const run = new PayrollRunPage(page);

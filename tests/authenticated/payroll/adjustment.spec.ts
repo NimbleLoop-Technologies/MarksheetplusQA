@@ -235,14 +235,26 @@ test.describe('Adjustment — posting', () => {
     await P.saveEvidence('adjustment-boundaries.txt', log.join('\n'));
   });
 
-  test('Recover is capped at what the run owes the staff member (review fix): the API refuses with the owed amount', async () => {
+  test('P-RECOVER-CAP: Recover follows the same rule as Pay more — 1 to the monthly salary — before and after payment, not "what the run owes"', async () => {
     await ensurePublished();
-    // Sana: net 4,000 + a 500 pay-more (earlier test) → owes at most 4,500.
-    const res = await P.postAdjustment(w.owner.api, w.data.runId, { staffMemberId: w.data.sana.id, direction: 'Recover', amount: 20000, reason: 'Over-recovery' });
-    const text = await res.text();
-    await P.saveEvidence('review-fix-recover-cap.txt', `POST adjustment Recover 20000 for a leaver owed ~4,500 -> ${res.status()} ${text}`);
-    expect(res.status()).toBe(400);
-    expect(text).toMatch(/A recovery cannot be larger than what this staff member is owed for this run, PKR [\d,]+\./);
+    // 86eyqaudw Field Specifications: Amount "1 to the staff member's monthly salary"; the only refusal is
+    // "An amount cannot be larger than the monthly salary. Post two adjustments if it genuinely is."
+    // Sana (salary 24,000, left on the 5th, net ~4,000, Unpaid) and Ayesha (salary 45,000, net 42,380, Paid).
+    const log: string[] = [];
+    const post = async (s: P.Staff, amount: number) => {
+      const res = await P.postAdjustment(w.owner.api, w.data.runId, { staffMemberId: s.id, direction: 'Recover', amount, reason: `Recover ${amount} (rule check)` });
+      const text = await res.text();
+      log.push(`Recover ${amount} for ${s.name} (salary ${s.salary}) -> ${res.status()} ${text.slice(0, 220)}`);
+      return { status: res.status(), text };
+    };
+    const unpaidAboveNet = await post(w.data.sana, 5000);      // above what the run owes, within salary, line Unpaid
+    const paidAboveNet = await post(w.data.ayesha, 45000);     // = salary: above the frozen net (+ any pay-mores), line Paid
+    const aboveSalary = await post(w.data.sana, 24001);        // above salary: the one refusal the story specifies
+    await P.saveEvidence('P-RECOVER-CAP.txt', log.join('\n'));
+    expect(aboveSalary.status).toBe(400);
+    expect(aboveSalary.text).toContain('An amount cannot be larger than the monthly salary. Post two adjustments if it genuinely is.');
+    expect(unpaidAboveNet.status, unpaidAboveNet.text).toBe(200);
+    expect(paidAboveNet.status, paidAboveNet.text).toBe(200);
   });
 
   test('P-ADJ-ERROR-COPY: a refused adjustment shows the server\'s reason in the modal, not "Check your connection"', async ({ browser }) => {
@@ -250,12 +262,17 @@ test.describe('Adjustment — posting', () => {
     const page = await P.openApp(browser, w, P.runPath(w.data.runId));
     const run = new PayrollRunPage(page);
     await run.expectPublishedLoaded();
+    // The server's validation refusal (same ProblemDetails shape the API returns for an Amount error).
+    const REASON = 'QA: the server refused this adjustment for a stated reason.';
+    await page.route('**/adjustments', (route) => route.request().method() === 'POST'
+      ? route.fulfill({ status: 400, contentType: 'application/problem+json', body: JSON.stringify({ type: 'https://tools.ietf.org/html/rfc9110#section-15.5.1', title: 'One or more validation errors occurred.', status: 400, errors: { Amount: [REASON] } }) })
+      : route.continue());
     await run.postAdjustment.click();
-    await run.fillAdjustment({ staff: w.data.sana.name, direction: 'Recover', amount: '20000', reason: 'Over-recovery from the UI' });
+    await run.fillAdjustment({ staff: w.data.sana.name, direction: 'Recover', amount: '1000', reason: 'Server refusal from the UI' });
     await run.dialogButton('Post adjustment').click();
-    await expect(run.dialogText(/We could not post this adjustment|A recovery cannot be larger/)).toBeVisible();
+    await expect(run.dialogText(/We could not post this adjustment|QA: the server refused/)).toBeVisible();
     await page.screenshot({ path: P.shot('P-ADJ-ERROR-COPY.png') });
-    await expect(run.dialogText(/A recovery cannot be larger than what this staff member is owed for this run/)).toBeVisible();
+    await expect(run.dialogText(REASON)).toBeVisible();
     await page.context().close();
   });
 
