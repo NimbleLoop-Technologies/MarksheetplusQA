@@ -269,6 +269,9 @@ export QA_MONGOSH="$CI_DIR/bin/mongosh" QA_MONGO_URL="mongodb://localhost:27017/
 # container's local socket; fixtures still pass them so a host psql (qa555) keeps working.
 export PATH="$CI_DIR/bin:$PATH" QA_PG_HOST=localhost QA_PG_PORT=5432 QA_PG_USER="$QA_CI_PG_USER" QA_PG_PASSWORD="$QA_CI_PG_PASSWORD" QA_PG_SCHOOL_DB=mp-shared-schools-db
 export QA_WORKERS="$QA_CI_WORKERS" QA_ADMISSION_PREFIX="${QA_ADMISSION_PREFIX:-CI-}"
+# Specs that save evidence (challan-name, attendance-backdating) default to QA-cycle folders on the box; keep
+# a CI run's screenshots in its own artifacts instead of overwriting a cycle's evidence.
+export QA_EVIDENCE_DIR="$QA_CI_ARTIFACTS_DIR/evidence"; mkdir -p "$QA_EVIDENCE_DIR"
 
 # ── 7. Suites ──────────────────────────────────────────────────────────────────────────────────
 # Projects whose product feature is not in every MarksheetPlus branch yet run only when the checkout has it.
@@ -276,6 +279,8 @@ has_feature() { # has_feature <project>
 	case "$1" in
 		# PR 548 (back-dated attendance, CU-z94x8ean2v): the empty past-date roster message it introduced.
 		attendance-backdating) grep -rqsF "No students were enrolled in this section on this date" "$SRC" --include=*.cs --include=*.razor ;;
+		# PR 547 (challan under family or student name, CU-z94x8eapp5): the fee policy switch it introduced.
+		challan-name) grep -rqsF "Generate challans under student name" "$SRC" --include=*.cs --include=*.razor ;;
 		*) return 0 ;;
 	esac
 }

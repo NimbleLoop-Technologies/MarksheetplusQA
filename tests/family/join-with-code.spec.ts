@@ -38,6 +38,17 @@ const bare = (code: string) => code.replace('-', '');
 // Each test seeds a student (seed.sh) and loads two WASM apps; 30 s is too tight on the local stack.
 test.describe.configure({ timeout: 90_000 });
 
+/**
+ * A just-linked child shows as "Child" until the school's profile snapshot is projected (outbox relay,
+ * a few seconds) and the dashboard does not refresh itself, so reload until the name appears once.
+ */
+async function expectChildOnDashboard(dashboard: FamilyDashboardPage, fullName: string) {
+  await expect(async () => {
+    await dashboard.goto();
+    await expect(dashboard.child(fullName)).toHaveCount(1, { timeout: 3_000 });
+  }).toPass({ timeout: 45_000 });
+}
+
 test.describe('Join with an invite code', () => {
   test('the deep link shows the invite card: school, first name only, class, masked admission number, expiry', async ({ page, adminPage, student }) => {
     const { code } = await issueCode(adminPage, student);
@@ -143,7 +154,7 @@ test.describe('Join with an invite code', () => {
 
     const dashboard = new FamilyDashboardPage(page);
     await dashboard.expectLoaded();
-    await expect(dashboard.child(student.fullName)).toBeVisible();
+    await expectChildOnDashboard(dashboard, student.fullName);
 
     const register = new StudentsRegisterPage(adminPage);
     await register.goto();
@@ -184,11 +195,16 @@ test.describe('Join with an invite code', () => {
     const acceptCalls: string[] = [];
     page.on('request', (r) => r.method() === 'POST' && /\/link-invites\/[^/]+\/accept$/.test(r.url()) && acceptCalls.push(r.url()));
 
+    const accepted = page.waitForResponse(
+      (r) => r.request().method() === 'POST' && /\/link-invites\/[^/]+\/accept$/.test(r.url()),
+      { timeout: 30_000 },
+    );
     await join.connectButton.dblclick();
+    expect((await accepted).ok(), 'accept').toBeTruthy();
 
     const dashboard = new FamilyDashboardPage(page);
     await dashboard.expectLoaded();
-    await expect(dashboard.child(student.fullName)).toHaveCount(1);
+    await expectChildOnDashboard(dashboard, student.fullName);
     expect(acceptCalls).toHaveLength(1);
   });
 
