@@ -69,7 +69,9 @@ test.describe('shell notes: create, edit, switch, delete (desktop)', () => {
     await notes.deleteSelectedNote();
     await notes.confirmDelete();
     expect(await notes.noteTitles()).toEqual(['Second']);
-    await expect.poll(async () => (await listServerNotes(page)).map((n) => n.content)).toEqual(['Second']);
+    // The delete is confirmed in the UI immediately; the server row follows. The default 5 s expect
+    // timeout loses that race on a loaded stack.
+    await expect.poll(async () => (await listServerNotes(page)).map((n) => n.content), { timeout: 20_000 }).toEqual(['Second']);
   });
 
   test('Escape closes the drawer and returns focus to the header Notes action', async ({ page }) => {

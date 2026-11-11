@@ -130,8 +130,16 @@ test.describe('Join with an invite code', () => {
     const { code } = await issueCode(adminPage, student);
     const join = new JoinWithCodePage(page);
     await join.goto(bare(code));
+    await expect(join.connectButton).toBeVisible();
 
+    // connect() returns on the click. The dashboard (and the school's loss of the invite action)
+    // follow the accept response and the navigation to /dashboard, not the click itself.
+    const accepted = page.waitForResponse(
+      (r) => r.request().method() === 'POST' && /\/link-invites\/[^/]+\/accept$/.test(r.url()),
+      { timeout: 30_000 },
+    );
     await join.connect();
+    expect((await accepted).ok(), 'accept').toBeTruthy();
 
     const dashboard = new FamilyDashboardPage(page);
     await dashboard.expectLoaded();
