@@ -1,0 +1,42 @@
+# Sample for MarksheetPlus .github/workflows/qa-regression.yml (replaces the integration-URL job in PR #556).
+# Runs the MarksheetplusQA suite against THIS pull request's code on a throwaway Docker stack built on the
+# runner. No QA_EMAIL / QA_PASSWORD / QA_PARENT_* secrets: every account is created by the stack's seed.
+# The only secret is the existing GH_PACKAGES_TOKEN (read:packages) for the private TailwindUi NuGet feed.
+name: QA regression
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: qa-regression-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    name: MarksheetplusQA suite (PR stack)
+    runs-on: ubuntu-latest        # needs Docker + docker compose v2 (preinstalled on ubuntu-latest)
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout MarksheetPlus (PR head)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: mp
+
+      - name: Checkout MarksheetplusQA (main)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: NimbleLoop-Technologies/MarksheetplusQA
+          ref: main
+          path: qa
+
+      - name: Regression on the PR's own stack
+        uses: ./qa/.github/actions/regression
+        with:
+          marksheetplus-path: mp
+          gh-packages-user: ${{ github.actor }}
+          gh-packages-token: ${{ secrets.GH_PACKAGES_TOKEN }}
+          # suites: auto        # default: every project whose feature this checkout contains
+          # workers: "1"

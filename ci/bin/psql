@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# psql shim for the CI stack (fixtures/attendance.ts calls plain `psql -h ... -U ... -d ...`): runs psql inside the
+# stack's postgres container over its local socket. -h/-p from the caller are dropped (they name the host's view).
+set -euo pipefail
+: "${QA_CI_COMPOSE_PROJECT:?QA_CI_COMPOSE_PROJECT is not set (export it from ci/run-regression.sh)}"
+args=()
+while (($#)); do
+	case "$1" in
+		-h|-p) shift 2 ;;
+		-h*|-p*|--host=*|--port=*) shift ;;
+		*) args+=("$1"); shift ;;
+	esac
+done
+cid="$(docker ps -q -f "label=com.docker.compose.project=$QA_CI_COMPOSE_PROJECT" -f "label=com.docker.compose.service=postgres" | head -n1)"
+[[ -n "$cid" ]] || { echo "psql shim: no running postgres container in compose project $QA_CI_COMPOSE_PROJECT" >&2; exit 1; }
+exec docker exec -i "$cid" psql "${args[@]}"

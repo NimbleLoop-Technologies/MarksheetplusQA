@@ -1,0 +1,83 @@
+name: MarksheetplusQA regression (self-contained stack)
+description: >
+  Builds a MarksheetPlus checkout, starts it as a throwaway Docker stack (infra + RestApi, AuthApp, WebApp,
+  FamilyApp, Worker behind a TLS edge), seeds local-only test accounts and runs the MarksheetplusQA Playwright
+  regression suite against it. Wraps ci/run-regression.sh; see docs/qa/CI.md.
+inputs:
+  marksheetplus-path:
+    description: Path (relative to $GITHUB_WORKSPACE or absolute) of the MarksheetPlus checkout to test.
+    required: true
+  suites:
+    description: Comma-separated Playwright projects, or "auto" (every project whose feature the checkout contains).
+    default: auto
+  workers:
+    description: Playwright workers.
+    default: "1"
+  compose-project:
+    description: docker compose project name (unique per Docker host).
+    default: qaci
+  playwright-args:
+    description: Extra arguments for `playwright test` (e.g. "--grep @critical").
+    default: ""
+  gh-packages-user:
+    description: User for the private NimbleLoop NuGet feed (TailwindUi.Blazor). Needed unless the NuGet cache already has it.
+    default: ""
+  gh-packages-token:
+    description: Token (read:packages) for the private NimbleLoop NuGet feed. Pass a secret; never logged.
+    default: ""
+  setup-toolchain:
+    description: Install .NET (from the checkout's global.json) and Node 20. Set false if the job already did.
+    default: "true"
+  upload-artifacts:
+    description: Upload the Playwright report, test results and stack logs as the `qa-regression` artifact.
+    default: "true"
+outputs:
+  artifacts-dir:
+    description: Directory holding playwright-report/, test-results/, stack-logs/ and summary.md.
+    value: ${{ steps.paths.outputs.artifacts }}
+runs:
+  using: composite
+  steps:
+    - id: paths
+      shell: bash
+      run: |
+        qa_root="$(cd "${{ github.action_path }}/../../.." && pwd)"
+        mp="${{ inputs.marksheetplus-path }}"; [[ "$mp" = /* ]] || mp="$GITHUB_WORKSPACE/$mp"
+        echo "qa_root=$qa_root" >> "$GITHUB_OUTPUT"
+        echo "mp=$mp" >> "$GITHUB_OUTPUT"
+        echo "artifacts=$RUNNER_TEMP/qa-regression" >> "$GITHUB_OUTPUT"
+    - if: inputs.setup-toolchain == 'true'
+      uses: actions/setup-dotnet@v4
+      with:
+        global-json-file: ${{ steps.paths.outputs.mp }}/src/MarksheetPlusCode/global.json
+    - if: inputs.setup-toolchain == 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+    - uses: actions/cache@v4
+      with:
+        path: ~/.nuget/packages
+        key: qa-nuget-${{ runner.os }}-${{ hashFiles(format('{0}/src/MarksheetPlusCode/**/*.csproj', inputs.marksheetplus-path), format('{0}/src/MarksheetPlusCode/Directory.*.props', inputs.marksheetplus-path)) }}
+        restore-keys: qa-nuget-${{ runner.os }}-
+    - name: Run regression on the PR's own stack
+      shell: bash
+      env:
+        GH_PACKAGES_USER: ${{ inputs.gh-packages-user }}
+        GH_PACKAGES_TOKEN: ${{ inputs.gh-packages-token }}
+        QA_CI_ARTIFACTS_DIR: ${{ steps.paths.outputs.artifacts }}
+        QA_CI_WORK_DIR: ${{ runner.temp }}/qa-ci-work
+      run: |
+        extra=(); [[ -n "${{ inputs.playwright-args }}" ]] && read -r -a extra <<<"${{ inputs.playwright-args }}"
+        "${{ steps.paths.outputs.qa_root }}/ci/run-regression.sh" \
+          --mp-dir "${{ steps.paths.outputs.mp }}" \
+          --project "${{ inputs.compose-project }}" \
+          --suites "${{ inputs.suites }}" \
+          --workers "${{ inputs.workers }}" \
+          -- "${extra[@]}"
+    - if: always() && inputs.upload-artifacts == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: qa-regression
+        path: ${{ steps.paths.outputs.artifacts }}
+        retention-days: 14
+        if-no-files-found: ignore
