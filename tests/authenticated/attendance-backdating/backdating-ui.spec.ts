@@ -33,7 +33,7 @@ test.afterAll(async () => {
   await api?.dispose();
 });
 
-test('an unmarked past day opens from the month grid, is marked, and the month grid updates without a reload', async ({ page }) => {
+test('an unmarked past day opens from the month grid, is marked, and the month grid updates without a reload', { tag: '@smoke' }, async ({ page }) => {
   const register = new AttendanceRegisterPage(page);
   const date = OPEN_FROM_GRID_DATE();
 

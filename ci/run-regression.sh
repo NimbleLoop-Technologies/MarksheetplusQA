@@ -10,6 +10,8 @@
 #   --work-dir PATH      scratch dir for publish output, generated env and logs                    [QA_CI_WORK_DIR=<repo>/.ci-work]
 #   --artifacts PATH     where reports and logs are copied                                         [QA_CI_ARTIFACTS_DIR=<repo>/ci-artifacts]
 #   --suites LIST        comma list of Playwright projects, or "auto"                              [QA_CI_SUITES=auto]
+#   --mode smoke|full    smoke = only tests tagged @smoke (critical flows per feature), full = all  [QA_CI_MODE=full]
+#   --smoke              shorthand for --mode smoke
 #   --workers N          Playwright workers                                                        [QA_CI_WORKERS=1]
 #   --skip-build         reuse the publish output already in the work dir                          [QA_CI_SKIP_BUILD=false]
 #   --skip-npm           skip `npm ci` + `playwright install` (already done)                       [QA_CI_SKIP_NPM=false]
@@ -37,13 +39,15 @@ while (($#)); do
 		--work-dir) QA_CI_WORK_DIR="$2"; shift 2 ;;
 		--artifacts) QA_CI_ARTIFACTS_DIR="$2"; shift 2 ;;
 		--suites) QA_CI_SUITES="$2"; shift 2 ;;
+		--mode) QA_CI_MODE="$2"; shift 2 ;;
+		--smoke) QA_CI_MODE=smoke; shift ;;
 		--workers) QA_CI_WORKERS="$2"; shift 2 ;;
 		--skip-build) QA_CI_SKIP_BUILD=true; shift ;;
 		--skip-npm) QA_CI_SKIP_NPM=true; shift ;;
 		--keep) QA_CI_KEEP_STACK=true; shift ;;
 		--down) DOWN_ONLY=true; shift ;;
 		--) shift; PW_EXTRA=("$@"); break ;;
-		-h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 0 ;;
+		-h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}"; exit 0 ;;
 		*) die "unknown argument $1 (see --help)" 2 ;;
 	esac
 done
@@ -54,6 +58,8 @@ export QA_CI_WORK_DIR="$(mkdir -p "${QA_CI_WORK_DIR:-$QA_ROOT/.ci-work}" && cd "
 QA_CI_ARTIFACTS_DIR="${QA_CI_ARTIFACTS_DIR:-$QA_ROOT/ci-artifacts}"
 QA_CI_SUITES="${QA_CI_SUITES:-auto}"
 QA_CI_WORKERS="${QA_CI_WORKERS:-1}"
+QA_CI_MODE="${QA_CI_MODE:-full}"
+case "$QA_CI_MODE" in smoke|full) ;; *) die "--mode must be smoke or full (got '$QA_CI_MODE')" 2 ;; esac
 QA_CI_SKIP_BUILD="${QA_CI_SKIP_BUILD:-false}"
 QA_CI_SKIP_NPM="${QA_CI_SKIP_NPM:-false}"
 QA_CI_KEEP_STACK="${QA_CI_KEEP_STACK:-false}"
@@ -346,7 +352,9 @@ if [[ " ${SUITES[*]} " == *" challan-name "* && "$QA_CI_WORKERS" != 1 ]]; then
 	warn "challan-name shares the one-minute fee scheduler and must run with --workers=1; forcing 1"
 	QA_CI_WORKERS=1
 fi
-log "playwright test ${PW_PROJECTS[*]} --workers=$QA_CI_WORKERS ${PW_EXTRA[*]:-}"
+# Smoke: the projects stay the same (setup/family-setup run as dependencies); only @smoke-tagged tests run.
+if [[ "$QA_CI_MODE" == smoke ]]; then PW_EXTRA=(--grep @smoke "${PW_EXTRA[@]}"); fi
+log "playwright test (mode $QA_CI_MODE) ${PW_PROJECTS[*]} --workers=$QA_CI_WORKERS ${PW_EXTRA[*]:-}"
 set +e
 npx playwright test "${PW_PROJECTS[@]}" --workers="$QA_CI_WORKERS" "${PW_EXTRA[@]}" 2>&1 | tee "$LOGS/playwright.log"
 PW_RC=${PIPESTATUS[0]}
@@ -358,9 +366,9 @@ cp -r "$QA_ROOT/playwright-report" "$QA_CI_ARTIFACTS_DIR/" 2>/dev/null || true
 cp -r "$QA_ROOT/test-results" "$QA_CI_ARTIFACTS_DIR/" 2>/dev/null || true
 R="$QA_ROOT/test-results/results.json"
 if [[ -f "$R" ]]; then
-	SUMMARY="$(jq -r --arg mp "$MP_SHA" --arg qa "$QA_SHA" --arg suites "${SUITES[*]}" '
+	SUMMARY="$(jq -r --arg mp "$MP_SHA" --arg qa "$QA_SHA" --arg suites "${SUITES[*]}" --arg mode "$QA_CI_MODE" '
 		.stats as $s |
-		"### MarksheetplusQA regression\n\nMarksheetPlus `\($mp)` · MarksheetplusQA `\($qa)` · projects: \($suites)\n\n| passed | failed | flaky | skipped | duration |\n|---|---|---|---|---|\n| \($s.expected) | \($s.unexpected) | \($s.flaky) | \($s.skipped) | \(($s.duration/60000*10|floor)/10) min |"' "$R")"
+		"### MarksheetplusQA regression\n\nMarksheetPlus `\($mp)` · MarksheetplusQA `\($qa)` · mode: \($mode) · projects: \($suites)\n\n| passed | failed | flaky | skipped | duration |\n|---|---|---|---|---|\n| \($s.expected) | \($s.unexpected) | \($s.flaky) | \($s.skipped) | \(($s.duration/60000*10|floor)/10) min |"' "$R")"
 	FAILED="$(jq -r '[.. | objects | select(has("specs")) | .specs[] | select(.ok==false) | "- \(.file):\(.line) \(.title)"] | unique | .[]' "$R" 2>/dev/null | head -50)"
 	[[ -n "$FAILED" ]] && SUMMARY+=$'\n\n**Failed**\n'"$FAILED"
 	printf '%s\n' "$SUMMARY" | tee "$QA_CI_ARTIFACTS_DIR/summary.md"

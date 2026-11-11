@@ -7,6 +7,11 @@ inputs:
   marksheetplus-path:
     description: Path (relative to $GITHUB_WORKSPACE or absolute) of the MarksheetPlus checkout to test.
     required: true
+  mode:
+    description: >
+      "smoke" runs only the tests tagged @smoke (the critical flows of each feature, ~10 min of Playwright);
+      "full" runs the whole suite (~60 min).
+    default: smoke
   suites:
     description: Comma-separated Playwright projects, or "auto" (every project whose feature the checkout contains).
     default: auto
@@ -29,7 +34,7 @@ inputs:
     description: Install .NET (from the checkout's global.json) and Node 20. Set false if the job already did.
     default: "true"
   upload-artifacts:
-    description: Upload the Playwright report, test results and stack logs as the `qa-regression` artifact.
+    description: Upload the Playwright report, test results and stack logs as the `qa-regression-<mode>` artifact.
     default: "true"
 outputs:
   artifacts-dir:
@@ -59,13 +64,14 @@ runs:
         path: ~/.nuget/packages
         key: qa-nuget-${{ runner.os }}-${{ hashFiles(format('{0}/src/MarksheetPlusCode/**/*.csproj', inputs.marksheetplus-path), format('{0}/src/MarksheetPlusCode/Directory.*.props', inputs.marksheetplus-path)) }}
         restore-keys: qa-nuget-${{ runner.os }}-
-    - name: Run regression on the PR's own stack
+    - name: Run regression (${{ inputs.mode }}) on the PR's own stack
       shell: bash
       env:
         GH_PACKAGES_USER: ${{ inputs.gh-packages-user }}
         GH_PACKAGES_TOKEN: ${{ inputs.gh-packages-token }}
         QA_CI_ARTIFACTS_DIR: ${{ steps.paths.outputs.artifacts }}
         QA_CI_WORK_DIR: ${{ runner.temp }}/qa-ci-work
+        QA_CI_MODE: ${{ inputs.mode }}
       run: |
         extra=(); [[ -n "${{ inputs.playwright-args }}" ]] && read -r -a extra <<<"${{ inputs.playwright-args }}"
         "${{ steps.paths.outputs.qa_root }}/ci/run-regression.sh" \
@@ -77,7 +83,7 @@ runs:
     - if: always() && inputs.upload-artifacts == 'true'
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        name: qa-regression
+        name: qa-regression-${{ inputs.mode }}
         path: ${{ steps.paths.outputs.artifacts }}
         retention-days: 14
         if-no-files-found: ignore

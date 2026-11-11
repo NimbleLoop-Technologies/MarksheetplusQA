@@ -137,7 +137,7 @@ test.describe('Join with an invite code', () => {
     expect(pageErrors).toEqual([]);
   });
 
-  test('Connect adds the child to the dashboard and the school no longer offers an invite code', async ({ page, adminPage, student }) => {
+  test('Connect adds the child to the dashboard and the school no longer offers an invite code', { tag: '@smoke' }, async ({ page, adminPage, student }) => {
     const { code } = await issueCode(adminPage, student);
     const join = new JoinWithCodePage(page);
     await join.goto(bare(code));

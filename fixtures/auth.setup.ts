@@ -4,7 +4,7 @@ import { LoginPage } from '../pages/LoginPage';
 
 const authFile = path.join(__dirname, '..', '.auth', 'user.json');
 
-setup('authenticate school admin', async ({ page }) => {
+setup('authenticate school admin', { tag: '@smoke' }, async ({ page }) => {
   const email = process.env.QA_EMAIL;
   const password = process.env.QA_PASSWORD;
   if (!email || !password) throw new Error('QA_EMAIL / QA_PASSWORD missing from .env');

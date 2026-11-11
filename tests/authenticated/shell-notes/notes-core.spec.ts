@@ -23,7 +23,7 @@ test.describe('shell notes: create, edit, switch, delete (desktop)', () => {
     await expect(notes.newNoteButton).toBeVisible();
   });
 
-  test('a new note takes multi-line text and is titled by its first line', async ({ page }) => {
+  test('a new note takes multi-line text and is titled by its first line', { tag: '@smoke' }, async ({ page }) => {
     const notes = await shell.openNotesFromHeader();
     await notes.newNote();
     await expect(notes.note('Untitled note')).toBeVisible();

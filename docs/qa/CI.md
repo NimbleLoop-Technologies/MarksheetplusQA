@@ -24,6 +24,7 @@ ci/run-regression.sh --project qaci --down          # tear a kept stack down
 | MarksheetPlus checkout | `--mp-dir` / `QA_CI_MP_DIR` | required | Repo root (has `src/MarksheetPlusCode/MarksheetPlusCode.sln`). Any branch or PR head. |
 | Compose project | `--project` / `QA_CI_COMPOSE_PROJECT` | `qaci` | Must be unique on the Docker host; also names the images (`<project>-api:local` …). |
 | Projects | `--suites` / `QA_CI_SUITES` | `auto` | `auto` = every Playwright project whose feature the checkout contains (see below). |
+| Mode | `--mode smoke\|full` (`--smoke`) / `QA_CI_MODE` | `full` (the composite action defaults to `smoke`) | `smoke` adds `--grep @smoke`: only the critical flows tagged below. Do not also pass `--grep` after `--` in smoke mode (the last `--grep` wins). |
 | Workers | `--workers` / `QA_CI_WORKERS` | `1` | The self-seeding suites were written for 1 worker. `challan-name` forces 1 (about 12 min per file). |
 | Ports | `QA_CI_API_PORT` `QA_CI_AUTH_PORT` `QA_CI_WEB_PORT` `QA_CI_FAMILY_PORT` | 7244 7104 7236 7100 | Published on `127.0.0.1` (`QA_CI_BIND_ADDRESS`). Served as `https://localhost:<port>`. |
 | Private NuGet feed | `GH_PACKAGES_USER` / `GH_PACKAGES_TOKEN` | – | Read by `src/MarksheetPlusCode/nuget.config` for `TailwindUi.Blazor*`. Not needed when the NuGet cache already has them. |
@@ -109,6 +110,35 @@ past-date roster message). Until PR 548 is merged into MarksheetPlus `main`, oth
 instead of failing on a feature they do not have. Add a `has_feature` rule in `ci/run-regression.sh` for any
 future suite that lands here before its product PR merges.
 
+## Smoke vs full
+
+Every push to a PR runs **smoke**: the tests tagged `{ tag: '@smoke' }`, one to three critical end-to-end flows per
+feature (the main happy path plus the most important guard). The **full** suite runs when the PR has the
+`full-regression` label, on a manual `workflow_dispatch`, and nightly (see `docs/qa/ci/qa-regression.workflow.yml`).
+Smoke keeps the same Playwright projects and gates, so `setup` / `family-setup` still run as dependencies and
+`challan-name` / `attendance-backdating` only run when the checkout has their feature.
+
+| Feature (project) | Smoke tests (`file:line`) | Measured | Left for full |
+|---|---|---|---|
+| Sign-in (`setup`, `family-setup`) | `fixtures/auth.setup.ts:7` school admin sign-in · `fixtures/parent.family-setup.ts:7` family parent sign-in | 5 s · 4 s | – (the `anonymous` project has no tests) |
+| Family invites, school side (`authenticated`) | `invite-code-drawer.spec.ts:33` generate an ABC-DEF code · `:69` the WhatsApp invite carries school, parent, child, code, expiry and the /join button code · `:104` Resend is blocked after the 3-per-24h allowance | 6 s · 12 s · 25 s | regenerate/cancel/expired drawer states, copy, the 30-sends rate-limit check (58 s) |
+| Join with a code (`family`) | `join-with-code.spec.ts:140` Connect adds the child to the dashboard and the school loses the invite action · `new-parent.spec.ts:51` a parent registers from the invite link, goes through family setup and connects · `new-parent.spec.ts:84` 5 wrong codes lock the parent out | 15 s · 17 s · 14 s | code-format variants, used/cancelled/expired/regenerated refusals, Not my child, deep-link sign-in, `regenerate-race` (WhatsApp timing, ~3 min) |
+| Link to an existing child (`family`) | `existing-child-link.spec.ts:139` connecting the suggested child links it, no duplicate (AC7) · `:259` accepting with another family's child id is refused | 19 s · 15 s | suggestion rules (AC5), pick-other / add-new, candidates API, retries and double-click |
+| Shell notes (`shell-notes`) | `notes-core.spec.ts:26` create a multi-line note titled by its first line · `notes-persistence.spec.ts:43` notes survive a full reload (server copy) · `notes-bugs.spec.ts:20` logout leaves nothing on the device and notes return after sign-in | 8 s · 11 s · 18 s | switch/close/delete/Escape/titles, error states, mobile, regression and the other bug re-checks. `notes-bugs:20` stands in for `notes-privacy.spec.ts`, which skips itself on the CI stack |
+| WhatsApp quota (`whatsapp-quota`) | `quota-active-campus.spec.ts:48` an activated campus gets 100 messages a month · `:58` a top-up request snapshots the package, only one pending · `:71` approving grants the add-on once (409 the second time) · `quota-backoffice-api.spec.ts:40` a campus owner cannot read back-office quota data | < 1 s each (plus the file's campus/operator set-up) | everything that waits on the Worker's 1-minute notification run (`notifications-default-off`, the send/skip/release tests, `quota-zero-plan`, ~12 min), the 60 s activation cache, UI card and alert tests, validation matrices |
+| Challan name (`challan-name`, PR 547 checkouts only) | `policy-toggle.spec.ts:57` the school policy's "Challan name" switch is off by default and saves · `:138` a crafted class-policy request cannot set it · `student-mode.spec.ts:66` one numbered challan per student · `:164` a student payment never settles a sibling or another family | 13 s · 1 s · 0 s · 1 s (the file's set-up waits for one fee scheduler pass, up to ~1 min) | mode switches across cycles (scheduler waits, ~5 min), prints/defaulters UI, edge cases, C2 known issue |
+| Attendance back-dating (`attendance-backdating`, PR 548 checkouts only) | `backdating-api.spec.ts:62` a past unmarked day is accepted, audited, in month + CSV · `:138` a future day is refused · `backdating-ui.spec.ts:36` mark a past day from the month grid | 1 s · 0 s · 4 s | rosters on past dates, other blocked dates, concurrency, known-bug tests, `cycle*-verify` re-checks |
+
+Measured on the QA box: on MarksheetPlus `main` (no 547/548) smoke ran 17 tests in **2.9 min** of Playwright time
+(`setup` and `family-setup` included). The challan-name smoke took 46 s on the PR 547 branch and the attendance
+smoke 23 s on the PR 548 branch (each including its own `setup`), so with every feature present smoke is 24 tests
+and about **4 min** (up to ~5 min when the fee scheduler pass is slow). The full suite is ~60 min.
+
+Rules for the tag: tag the test itself (`test('…', { tag: '@smoke' }, async …)`), never move or rename files, and
+keep the set within ~12 min of Playwright time. In a `serial` file (whatsapp-quota `quota-active-campus`) tag a
+contiguous run of tests from the start of the chain, since later tests depend on earlier ones.
+List the selection with `npx playwright test --list --grep @smoke`.
+
 ## Deviations from production (by design)
 
 - **OTP limiter**: the AuthApp/RestApi allow 30 register/verify calls per client IP per 15 min. A full run registers
@@ -122,7 +152,9 @@ future suite that lands here before its product PR merges.
 
 Paste `docs/qa/ci/qa-regression.workflow.yml` into MarksheetPlus `.github/workflows/qa-regression.yml`. It checks
 out the PR (`mp/`) and MarksheetplusQA `main` (`qa/`), then calls `./qa/.github/actions/regression` with
-`marksheetplus-path: mp`. What it needs from MarksheetPlus:
+`marksheetplus-path: mp` and `mode` (smoke on PR pushes; full for the `full-regression` label, manual runs and
+the nightly schedule). The report is uploaded as the `qa-regression-smoke` / `qa-regression-full` artifact. Create the
+`full-regression` label in MarksheetPlus once. What it needs from MarksheetPlus:
 
 - **Secrets**: only the existing `GH_PACKAGES_TOKEN` (read:packages, private TailwindUi feed). `QA_EMAIL`,
   `QA_PASSWORD`, `QA_PARENT_EMAIL`, `QA_PARENT_PASSWORD` are no longer used and can be deleted.

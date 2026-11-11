@@ -59,7 +59,7 @@ test.describe('roster on a past date', () => {
 });
 
 test.describe('submitting a past unmarked working day', () => {
-  test('is accepted, audited as AttendanceBackdated with the submitter, and shows in month + CSV', async () => {
+  test('is accepted, audited as AttendanceBackdated with the submitter, and shows in month + CSV', { tag: '@smoke' }, async () => {
     const date = BACKFILL_DATE();
     const marks = await api.marksFor(seeded.sectionA.id, date, [seeded.mover.id]);
     const res = await api.submit(seeded.sectionA.id, date, marks, 0);
@@ -135,7 +135,7 @@ test.describe('submitting a past unmarked working day', () => {
 });
 
 test.describe('dates that stay blocked', () => {
-  test('a future working day is rejected', async () => {
+  test('a future working day is rejected', { tag: '@smoke' }, async () => {
     const date = nextWorkingDay();
     const marks = (await api.register(seeded.sectionA.id)).students.map((s) => ({ studentId: s.studentId, status: PRESENT }));
     const res = await api.submit(seeded.sectionA.id, date, marks, 0);

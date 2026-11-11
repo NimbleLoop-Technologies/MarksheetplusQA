@@ -30,7 +30,7 @@ const parseDrawerDate = (text: string) => Date.parse(text.replace(',', ''));
 test.describe.configure({ timeout: 60_000 });
 
 test.describe('Family invite code drawer', () => {
-  test('generating a code shows a 6-character ABC-DEF code from the unambiguous alphabet', async ({ page, student }) => {
+  test('generating a code shows a 6-character ABC-DEF code from the unambiguous alphabet', { tag: '@smoke' }, async ({ page, student }) => {
     const register = new StudentsRegisterPage(page);
     await register.goto();
     const drawer = await register.openFamilyInviteDrawer(student);
@@ -66,7 +66,7 @@ test.describe('Family invite code drawer', () => {
     expect(new Set(sends.map((s) => s.body[2]))).toEqual(new Set([student.firstName]));
   });
 
-  test('the WhatsApp invite carries the school, parent, child first name, code, expiry and the bare code for the /join?code= button', async ({ page, student }) => {
+  test('the WhatsApp invite carries the school, parent, child first name, code, expiry and the bare code for the /join?code= button', { tag: '@smoke' }, async ({ page, student }) => {
     const register = new StudentsRegisterPage(page);
     await register.goto();
     const drawer = await register.openFamilyInviteDrawer(student);
@@ -101,7 +101,7 @@ test.describe('Family invite code drawer', () => {
     });
   });
 
-  test('Resend re-sends the same code and is disabled once the 3-per-24h allowance is used', async ({ page, student }) => {
+  test('Resend re-sends the same code and is disabled once the 3-per-24h allowance is used', { tag: '@smoke' }, async ({ page, student }) => {
     const register = new StudentsRegisterPage(page);
     await register.goto();
     const drawer = await register.openFamilyInviteDrawer(student);

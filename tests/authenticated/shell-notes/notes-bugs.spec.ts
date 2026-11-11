@@ -17,7 +17,7 @@ test.describe('shell notes: cycle-2 bug re-verification (head 481896bd)', () => 
     await clearNotes(page);
   });
 
-  test('NEW-1 / z94x8ec5cg notes leave nothing on the device after logout and return after resign-in', async ({ page }) => {
+  test('NEW-1 / z94x8ec5cg notes leave nothing on the device after logout and return after resign-in', { tag: '@smoke' }, async ({ page }) => {
     const notes = await shell.openNotesFromHeader();
     await notes.newNote('Persist after logout');
     await notes.close();

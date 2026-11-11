@@ -2,25 +2,58 @@
 # Runs the MarksheetplusQA suite against THIS pull request's code on a throwaway Docker stack built on the
 # runner. No QA_EMAIL / QA_PASSWORD / QA_PARENT_* secrets: every account is created by the stack's seed.
 # The only secret is the existing GH_PACKAGES_TOKEN (read:packages) for the private TailwindUi NuGet feed.
+#
+# Which suite runs:
+#   - every push to a PR (opened / synchronize / reopened / ready_for_review): smoke, the @smoke-tagged
+#     critical flows of each feature (~10 min of Playwright, ~20 min for the job)
+#   - a PR carrying the `full-regression` label: full (adding the label starts a full run; while the label
+#     stays on, every push runs full)
+#   - Actions → QA regression → Run workflow (workflow_dispatch): full by default, smoke selectable
+#   - nightly on the default branch: full
 name: QA regression
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Suite to run
+        type: choice
+        options: [full, smoke]
+        default: full
+  schedule:
+    - cron: "0 21 * * *"          # 02:00 PKT, default branch
+
+env:
+  # smoke on PR pushes; full for the label, a manual run (unless smoke was picked) and the nightly run.
+  QA_MODE: >-
+    ${{ github.event_name == 'workflow_dispatch' && inputs.mode
+     || github.event_name == 'schedule' && 'full'
+     || contains(github.event.pull_request.labels.*.name, 'full-regression') && 'full'
+     || 'smoke' }}
 
 concurrency:
-  group: qa-regression-${{ github.event.pull_request.number }}
+  # A new push cancels the PR's previous run of the same kind; smoke and full do not cancel each other.
+  group: >-
+    qa-regression-${{ github.event.pull_request.number || github.ref }}-${{
+    (github.event_name == 'workflow_dispatch' && inputs.mode)
+    || (github.event_name == 'schedule' && 'full')
+    || (contains(github.event.pull_request.labels.*.name, 'full-regression') && 'full')
+    || 'smoke' }}
   cancel-in-progress: true
 
 jobs:
   regression:
+    # On `labeled`, only the full-regression label starts a run; other labels do nothing.
+    if: github.event.action != 'labeled' || github.event.label.name == 'full-regression'
     name: MarksheetplusQA suite (PR stack)
     runs-on: ubuntu-latest        # needs Docker + docker compose v2 (preinstalled on ubuntu-latest)
-    timeout-minutes: 120
+    timeout-minutes: 120          # full ~80 min end to end; smoke ~20 min
     permissions:
       contents: read
     steps:
-      - name: Checkout MarksheetPlus (PR head)
+      - name: Checkout MarksheetPlus (PR head, or the dispatched / default branch)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           path: mp
@@ -32,10 +65,11 @@ jobs:
           ref: main
           path: qa
 
-      - name: Regression on the PR's own stack
+      - name: Regression (${{ env.QA_MODE }}) on the PR's own stack
         uses: ./qa/.github/actions/regression
         with:
           marksheetplus-path: mp
+          mode: ${{ env.QA_MODE }}
           gh-packages-user: ${{ github.actor }}
           gh-packages-token: ${{ secrets.GH_PACKAGES_TOKEN }}
           # suites: auto        # default: every project whose feature this checkout contains

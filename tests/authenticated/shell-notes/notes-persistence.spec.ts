@@ -40,7 +40,7 @@ test.describe('shell notes: persistence', () => {
     expect(await notes.noteTitles()).toEqual(['Visible everywhere']);
   });
 
-  test('notes survive a full page reload', async ({ page }) => {
+  test('notes survive a full page reload', { tag: '@smoke' }, async ({ page }) => {
     let notes = await shell.openNotesFromHeader();
     await notes.newNote('Reload note\nsecond line');
     await page.reload();
