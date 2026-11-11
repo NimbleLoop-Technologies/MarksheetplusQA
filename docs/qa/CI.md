@@ -54,7 +54,9 @@ Artifacts (`QA_CI_ARTIFACTS_DIR`): `playwright-report/`, `test-results/` (incl. 
 2. **Images** – thin runtime images (`ci/stack/Dockerfile.dotnet`, `Dockerfile.spa`, `Dockerfile.edge`) mirroring the
    runtime stages of `deploy/Dockerfile.*`.
 3. **Stack** (`ci/stack/docker-compose.yml`) – postgres 18, mongo 8, rabbitmq 4, minio, smtp4dev on the compose
-   network (nothing published) + **edge** (Caddy). The apps join the edge's network namespace
+   network (nothing published) + **edge** (Caddy). Mongo is overridden to `GLIBC_TUNABLES=glibc.pthread.rseq=1`:
+   the image default (`rseq=0`) makes mongod 8 exit 1 on GitHub-hosted runners (kernel `7.0.0-azure`,
+   SERVER-121912 / SERVER-136848). The apps join the edge's network namespace
    (`network_mode: service:edge`) and listen on `127.0.0.1:8081-8084`; Caddy serves them as
    `https://localhost:<port>` with a certificate from its own throwaway local CA, which the .NET containers add to
    their trust bundle. So `https://localhost:7104` is the AuthApp both for the browser on the runner and for the
@@ -65,7 +67,9 @@ Artifacts (`QA_CI_ARTIFACTS_DIR`): `playwright-report/`, `test-results/` (incl. 
 5. **Seed** – `ci/qa-data/seed-all.sh`: back-office operator, school owner + trial campus + session + Class 5-A +
    one student, family parent with setup completed (all from `ci/qa-data/accounts.env`).
 6. **Suite** – `npm ci`, `playwright install chromium`, then `playwright test --project=…` with the env below.
-7. **Teardown** – container logs are saved, then `docker compose down -v` and the images are removed.
+7. **Teardown** – logs for every compose service, plus `docker compose ps -a`, are saved under `stack-logs/`,
+   then `docker compose down -v` and the images are removed. An exited or unhealthy infra service also has its
+   last 50 log lines printed before the run fails.
 
 ### App configuration (test mode)
 
@@ -175,6 +179,6 @@ check timing out after 5 s) and the flaky `join-with-code.spec.ts:129` are timin
   back-dating through the `psql` shim has not run in CI yet.
 - Specs written against the shared site's seed hard-code its display names ("Testenv High School - Main",
   father "Imran Khan"); `accounts.env` uses the same names. Change both together.
-- The workflow has not been run on GitHub Actions yet (only end to end on the QA box with a remote Docker host).
+- `.github/workflows/ci-stack-selftest.yml` checks that postgres, mongo, rabbitmq, minio and smtp4dev become healthy on `ubuntu-latest`. The full Playwright workflow has not completed on GitHub Actions (MarksheetPlus #556 run 43055378568 died when `mongo:8` exited 1; see the stack note above).
 - Fork PRs get no `GH_PACKAGES_TOKEN`, so the NuGet restore fails for them.
 - Node prints a harmless `NO_COLOR is ignored due to FORCE_COLOR` warning per worker.

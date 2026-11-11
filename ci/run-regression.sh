@@ -90,11 +90,45 @@ QA_SHA="$(git -C "$QA_ROOT" rev-parse --short=8 HEAD 2>/dev/null || echo unknown
 log "MarksheetPlus $QA_CI_MP_DIR @ $MP_SHA | MarksheetplusQA @ $QA_SHA | project $QA_CI_COMPOSE_PROJECT | ports api=$QA_CI_API_PORT auth=$QA_CI_AUTH_PORT web=$QA_CI_WEB_PORT family=$QA_CI_FAMILY_PORT"
 
 STACK_UP=false
+DUMPED_INFRA=false
+# Every compose service, including ones that never became healthy. Written before `down` removes them.
+save_stack_logs() {
+	mkdir -p "$LOGS"
+	"${COMPOSE[@]}" ps -a > "$LOGS/ps.txt" 2>&1 || true
+	local s services
+	services="$("${COMPOSE[@]}" config --services 2>/dev/null || true)"
+	[[ -n "$services" ]] || services=$'postgres\nmongo\nrabbitmq\nminio\nsmtp4dev\nedge\napi\nauthapp\nworker\nweb\nfamilyapp'
+	while IFS= read -r s; do
+		[[ -n "$s" ]] || continue
+		"${COMPOSE[@]}" logs --no-color "$s" > "$LOGS/$s.log" 2>&1 || true
+	done <<<"$services"
+}
+# Unhealthy or exited infra, on stderr, so the Actions log shows why --wait failed.
+dump_failed_infra() {
+	$DUMPED_INFRA && return 0
+	DUMPED_INFRA=true
+	local line s state health
+	while IFS= read -r line; do
+		[[ -n "$line" ]] || continue
+		IFS=$'\t' read -r s state health <<<"$line"
+		case " $s " in
+			" postgres "|" mongo "|" rabbitmq "|" minio "|" smtp4dev ") ;;
+			*) continue ;;
+		esac
+		case "$state" in
+			exited|dead|restarting|removing) ;;
+			*) [[ "$health" == unhealthy ]] || continue ;;
+		esac
+		printf '\n----- %s state=%s health=%s (last 50 log lines) -----\n' "$s" "$state" "${health:-none}" >&2
+		"${COMPOSE[@]}" logs --no-color --tail 50 "$s" >&2 || true
+	done < <("${COMPOSE[@]}" ps -a --format $'{{.Service}}\t{{.State}}\t{{.Health}}' 2>/dev/null || true)
+}
 on_exit() {
 	local rc=$?
 	if $STACK_UP; then
-		for s in api authapp worker web familyapp edge; do "${COMPOSE[@]}" logs --no-color "$s" > "$LOGS/$s.log" 2>&1 || true; done
 		[[ -n "${WORKER_LOG_PID:-}" ]] && kill "$WORKER_LOG_PID" 2>/dev/null || true
+		save_stack_logs
+		[[ "$rc" != 0 ]] && dump_failed_infra
 		mkdir -p "$QA_CI_ARTIFACTS_DIR"; cp -r "$LOGS" "$QA_CI_ARTIFACTS_DIR/stack-logs" 2>/dev/null || true
 		if [[ "$QA_CI_KEEP_STACK" == true ]]; then log "stack left running (--keep); stop it with: $0 --project $QA_CI_COMPOSE_PROJECT --down"; else teardown; fi
 	fi
@@ -233,7 +267,7 @@ wait_for() { # wait_for URL EXPECTED_REGEX WHAT [timeout]
 }
 log "starting infra"
 "${COMPOSE[@]}" up -d --wait --wait-timeout "$QA_CI_HEALTH_TIMEOUT" postgres mongo rabbitmq minio smtp4dev > "$LOGS/compose-up.log" 2>&1 \
-	|| { cat "$LOGS/compose-up.log" >&2; die "infra did not become healthy"; }
+	|| { cat "$LOGS/compose-up.log" >&2; dump_failed_infra; die "infra did not become healthy"; }
 "${COMPOSE[@]}" up -d edge api >> "$LOGS/compose-up.log" 2>&1 || { cat "$LOGS/compose-up.log" >&2; die "edge/api failed to start"; }
 wait_for "$API_URL/api/post-deployment" 401 "RestApi"
 log "post-deployment hook (EF migrations, family DB, Mongo indexes, data migrations)"

@@ -28,6 +28,13 @@ services:
 
   mongo:
     image: mongo:8
+    # The official image sets GLIBC_TUNABLES=glibc.pthread.rseq=0 so tcmalloc can use rseq.
+    # mongod 8.0.21+ then exits 1 on kernels it reads as 6.19 or newer (SERVER-121912), including
+    # GitHub-hosted ubuntu-latest (uname -r 7.0.0-azure; Ubuntu keeps that string even when the
+    # upstream fix is present, SERVER-136848). rseq=1 leaves per-CPU caches off, which is the
+    # startup path that check allows. Do not drop this back to the image default.
+    environment:
+      GLIBC_TUNABLES: glibc.pthread.rseq=1
     command: ["--wiredTigerCacheSizeGB", "0.5"]
     volumes: ["mongodata:/data/db"]
     healthcheck:
@@ -35,6 +42,7 @@ services:
       interval: 3s
       timeout: 10s
       retries: 40
+      start_period: 20s
 
   rabbitmq:
     image: rabbitmq:4-management
