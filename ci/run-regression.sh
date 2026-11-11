@@ -265,7 +265,9 @@ export QA_PARENT_EMAIL="$(acct PARENT_EMAIL)" QA_PARENT_PASSWORD="$(acct PARENT_
 export QA_BACKOFFICE_EMAIL="$(acct OPERATOR_EMAIL)" QA_BACKOFFICE_PASSWORD="$(acct OPERATOR_PASSWORD)"
 export QA_SEED_SCRIPT="$CI_DIR/qa-data/seed.sh" QA_PARENT_SCRIPT="$CI_DIR/qa-data/parent.sh"
 export QA_MONGOSH="$CI_DIR/bin/mongosh" QA_MONGO_URL="mongodb://localhost:27017/mp-accounts-db"
-export PATH="$CI_DIR/bin:$PATH" QA_PG_HOST=localhost QA_PG_USER="$QA_CI_PG_USER" QA_PG_PASSWORD="$QA_CI_PG_PASSWORD" QA_PG_SCHOOL_DB=mp-shared-schools-db
+# QA_PG_PORT is the port inside the postgres container. The psql shim drops -h/-p and connects over the
+# container's local socket; fixtures still pass them so a host psql (qa555) keeps working.
+export PATH="$CI_DIR/bin:$PATH" QA_PG_HOST=localhost QA_PG_PORT=5432 QA_PG_USER="$QA_CI_PG_USER" QA_PG_PASSWORD="$QA_CI_PG_PASSWORD" QA_PG_SCHOOL_DB=mp-shared-schools-db
 export QA_WORKERS="$QA_CI_WORKERS" QA_ADMISSION_PREFIX="${QA_ADMISSION_PREFIX:-CI-}"
 
 # ── 7. Suites ──────────────────────────────────────────────────────────────────────────────────
@@ -279,7 +281,8 @@ has_feature() { # has_feature <project>
 }
 if [[ "$QA_CI_SUITES" == auto ]]; then
 	SUITES=()
-	for p in setup anonymous authenticated shell-notes whatsapp-quota attendance-backdating family-setup family; do
+	# challan-name waits on the 1-minute fee scheduler (~12 min per file) and must run at --workers=1.
+	for p in setup anonymous authenticated shell-notes whatsapp-quota challan-name attendance-backdating family-setup family; do
 		if has_feature "$p"; then SUITES+=("$p"); else warn "skipping project $p: this MarksheetPlus checkout does not contain its feature yet"; fi
 	done
 else
@@ -300,6 +303,10 @@ if [[ "$QA_CI_SKIP_NPM" != true ]]; then
 	fi
 fi
 rm -rf "$QA_ROOT/test-results" "$QA_ROOT/playwright-report" "$QA_ROOT/.auth"
+if [[ " ${SUITES[*]} " == *" challan-name "* && "$QA_CI_WORKERS" != 1 ]]; then
+	warn "challan-name shares the one-minute fee scheduler and must run with --workers=1; forcing 1"
+	QA_CI_WORKERS=1
+fi
 log "playwright test ${PW_PROJECTS[*]} --workers=$QA_CI_WORKERS ${PW_EXTRA[*]:-}"
 set +e
 npx playwright test "${PW_PROJECTS[@]}" --workers="$QA_CI_WORKERS" "${PW_EXTRA[@]}" 2>&1 | tee "$LOGS/playwright.log"

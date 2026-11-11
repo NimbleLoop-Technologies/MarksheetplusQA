@@ -24,7 +24,7 @@ ci/run-regression.sh --project qaci --down          # tear a kept stack down
 | MarksheetPlus checkout | `--mp-dir` / `QA_CI_MP_DIR` | required | Repo root (has `src/MarksheetPlusCode/MarksheetPlusCode.sln`). Any branch or PR head. |
 | Compose project | `--project` / `QA_CI_COMPOSE_PROJECT` | `qaci` | Must be unique on the Docker host; also names the images (`<project>-api:local` …). |
 | Projects | `--suites` / `QA_CI_SUITES` | `auto` | `auto` = every Playwright project whose feature the checkout contains (see below). |
-| Workers | `--workers` / `QA_CI_WORKERS` | `1` | The self-seeding suites were written for 1 worker. |
+| Workers | `--workers` / `QA_CI_WORKERS` | `1` | The self-seeding suites were written for 1 worker. `challan-name` forces 1 (about 12 min per file). |
 | Ports | `QA_CI_API_PORT` `QA_CI_AUTH_PORT` `QA_CI_WEB_PORT` `QA_CI_FAMILY_PORT` | 7244 7104 7236 7100 | Published on `127.0.0.1` (`QA_CI_BIND_ADDRESS`). Served as `https://localhost:<port>`. |
 | Private NuGet feed | `GH_PACKAGES_USER` / `GH_PACKAGES_TOKEN` | – | Read by `src/MarksheetPlusCode/nuget.config` for `TailwindUi.Blazor*`. Not needed when the NuGet cache already has them. |
 | Scratch / artifacts | `QA_CI_WORK_DIR` / `QA_CI_ARTIFACTS_DIR` | `.ci-work/` / `ci-artifacts/` | Both gitignored. |
@@ -83,23 +83,27 @@ integrations are skipped), `BackOffice__Operators__0` = the seeded CI operator o
 `QA_IGNORE_HTTPS_ERRORS=true`, `QA_OTP=000000`, `QA_EMAIL/QA_PASSWORD` (owner), `QA_PARENT_EMAIL/…_PASSWORD/…_PHONE`,
 `QA_BACKOFFICE_EMAIL/…_PASSWORD` (operator), `QA_SEED_SCRIPT`/`QA_PARENT_SCRIPT` (`ci/qa-data/*.sh`),
 `QA_WORKER_LOG` (live `docker compose logs -f worker`), `QA_MONGOSH` + `QA_MONGO_URL` (container shim),
-`QA_PG_*` + `psql` shim on `PATH`, `QA_ADMISSION_PREFIX=CI-`, `CI=true`.
+`QA_PG_HOST` `QA_PG_PORT` `QA_PG_USER` `QA_PG_PASSWORD` `QA_PG_SCHOOL_DB` (the psql shim on `PATH` forwards
+`-U`, `-d` and `PGPASSWORD`, and drops `-h`/`-p`), `QA_ADMISSION_PREFIX=CI-`, `CI=true`.
 
 ## Suites
 
 `auto` runs: `setup`, `anonymous`, `authenticated` (family-invites/invite-code-drawer), `shell-notes`,
-`whatsapp-quota`, `attendance-backdating`*, `family-setup`, `family` (join-with-code, new-parent,
+`whatsapp-quota`, `challan-name`, `attendance-backdating`*, `family-setup`, `family` (join-with-code, new-parent,
 existing-child-link, regenerate-race).
+
+`challan-name` (PR 547) is in `auto`. `fixtures/fees.ts` (and `fixtures/attendance.ts`) take the Postgres user,
+host, port, database and password from `QA_PG_USER`, `QA_PG_HOST`, `QA_PG_PORT`, `QA_PG_SCHOOL_DB` and
+`QA_PG_PASSWORD`. When those are unset the qa555 defaults still apply (`postgres` on `127.0.0.1:5432`,
+database `mp-shared-schools-db`; fees leaves the password unset, attendance falls back to `admin123`).
+On the CI stack the role is `qaci`. Each challan-name file waits on the worker's 1-minute scheduler, about
+12 minutes per file, and the project must run with `--workers=1` (the entry point's default; a higher
+`--workers` is forced back to 1 when this project is selected).
 
 \* `attendance-backdating` (MarksheetPlus PR 548) runs only when the checkout contains that feature (its empty
 past-date roster message). Until PR 548 is merged into MarksheetPlus `main`, other PRs skip it with a warning
 instead of failing on a feature they do not have. Add a `has_feature` rule in `ci/run-regression.sh` for any
 future suite that lands here before its product PR merges.
-
-`challan-name` (PR 547, merged into MarksheetplusQA `main` as 5908bb6) is **not** in `auto` yet: its fixture
-(`fixtures/fees.ts`) runs `psql -U postgres` against the box's shared Postgres, while the CI stack's Postgres
-role is `qaci` (reached through the `ci/bin/psql` shim). Pass `--suites …,challan-name` only after the fixture
-reads `QA_PG_USER` (or the shim maps the role) and the product PR is merged.
 
 ## Deviations from production (by design)
 
@@ -169,7 +173,6 @@ check timing out after 5 s) and the flaky `join-with-code.spec.ts:129` are timin
 - The per-IP OTP limiter is not exercised (see Deviations).
 - `attendance-backdating` is skipped until MarksheetPlus PR 548 is on the checked-out branch, so its Postgres
   back-dating through the `psql` shim has not run in CI yet.
-- `challan-name` (PR 547) is excluded from `auto`: it needs `psql -U postgres`, which the CI stack does not provide.
 - Specs written against the shared site's seed hard-code its display names ("Testenv High School - Main",
   father "Imran Khan"); `accounts.env` uses the same names. Change both together.
 - The workflow has not been run on GitHub Actions yet (only end to end on the QA box with a remote Docker host).

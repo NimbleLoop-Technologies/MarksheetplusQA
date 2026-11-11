@@ -22,8 +22,13 @@ import { cacheOwner, ownerFromCache, type CachedOwner, type CampusOwner } from '
 
 const run = promisify(execFile);
 
-export const SCHOOLS_DB = process.env.QA_SCHOOLS_DB ?? 'mp-shared-schools-db';
-const PG_HOST = process.env.QA_PG_HOST ?? '127.0.0.1';
+// CI exports QA_PG_* (role qaci). Unset, these are the qa555 netns defaults (user postgres, no password override).
+export const SCHOOLS_DB = process.env.QA_PG_SCHOOL_DB ?? process.env.QA_SCHOOLS_DB ?? 'mp-shared-schools-db';
+const PG = {
+  host: process.env.QA_PG_HOST ?? '127.0.0.1',
+  port: process.env.QA_PG_PORT ?? '5432',
+  user: process.env.QA_PG_USER ?? 'postgres',
+};
 
 /** Today's UTC date (the scheduler's run date), yyyy-mm-dd. */
 export const todayUtc = () => new Date().toISOString().slice(0, 10);
@@ -32,7 +37,11 @@ export const todayUtc = () => new Date().toISOString().slice(0, 10);
 
 /** Runs SQL against the schools DB; returns rows as arrays of strings (unaligned, tab separated). */
 export async function sql(statement: string, db = SCHOOLS_DB): Promise<string[][]> {
-  const { stdout } = await run('psql', ['-h', PG_HOST, '-U', 'postgres', '-d', db, '-At', '-F', '\t', '-v', 'ON_ERROR_STOP=1', '-c', statement], {
+  // Leave PGPASSWORD alone when QA_PG_PASSWORD is unset, so a local trust/peer/pgpass login still works.
+  const env = { ...process.env };
+  if (process.env.QA_PG_PASSWORD !== undefined) env.PGPASSWORD = process.env.QA_PG_PASSWORD;
+  const { stdout } = await run('psql', ['-h', PG.host, '-p', PG.port, '-U', PG.user, '-d', db, '-At', '-F', '\t', '-v', 'ON_ERROR_STOP=1', '-c', statement], {
+    env,
     timeout: 60_000,
     maxBuffer: 8 * 1024 * 1024,
   });
