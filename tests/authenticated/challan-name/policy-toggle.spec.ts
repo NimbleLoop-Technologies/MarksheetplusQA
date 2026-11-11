@@ -10,7 +10,8 @@ import { newCampusOwner, type CampusOwner } from '../../../fixtures/campus-owner
 import * as f from '../../../fixtures/fees';
 import { FeePolicyEditor, ROUTES, signInToWebApp } from '../../../pages/fees/AccountOffice';
 
-const EV = '/workspace/qa-cycles/pr-555/cycle-1/evidence';
+// Evidence folder of the QA cycle running the suite (QA_EVIDENCE_DIR), defaulting to cycle 1's.
+const EV = process.env.QA_EVIDENCE_DIR ?? '/workspace/qa-cycles/pr-555/cycle-1/evidence';
 const DESCRIPTION =
   'Off: one combined challan under the family name. On: a separate challan for each student. Applies from the next fee cycle; issued challans keep their grouping.';
 

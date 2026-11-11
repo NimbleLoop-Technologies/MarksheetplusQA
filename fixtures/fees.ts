@@ -136,13 +136,36 @@ export interface PolicyOptions {
   bank?: boolean;
 }
 
-/** The generation day that makes the scheduler issue a cycle today (today's UTC day must be an allowed day). */
+/** Whether today's UTC day is itself an allowed challan generation day (the scheduler then bills a new policy today on its own). */
+export const isGenerationDayToday = () => ALLOWED_DAYS.includes(new Date().getUTCDate());
+
+/**
+ * The generation day the specs bill on: today when today is an allowed day, otherwise the latest allowed day
+ * earlier this month (11 Nov -> 10). On such an off-day the scheduler only issues that cycle after
+ * armTodaysRun (DB SETUP) makes it a missed run, which waitForChallans does by itself.
+ */
 export function todaysGenerationDay(): number {
   const day = new Date().getUTCDate();
-  if (!ALLOWED_DAYS.includes(day)) {
-    throw new Error(`today's UTC day ${day} is not an allowed challan generation day (${ALLOWED_DAYS}); these specs need DB setup to bill today`);
-  }
-  return day;
+  return [...ALLOWED_DAYS].reverse().find((allowed) => allowed <= day)!;
+}
+
+/**
+ * DB SETUP, off-days only (a no-op when today is a generation day): makes this month's generation day a run the
+ * scheduler missed, so its next pass issues that cycle today: every policy version of the tenant starts on the
+ * 1st of the month (first generation date = this month's generation day), and the tenant's run row says the last
+ * run was the day before it (CalculatePendingChallanCycles then catches the cycle up).
+ */
+export async function armTodaysRun(tenantId: string): Promise<void> {
+  if (isGenerationDayToday()) return;
+  const now = new Date();
+  const monthStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
+  const lastRun = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), todaysGenerationDay() - 1)).toISOString().slice(0, 10);
+  await dbSetup(`off-day ${todayUtc()}: arm the scheduler for tenant ${tenantId} (generation day ${todaysGenerationDay()} as a missed run)`, `
+    update "FeePolicies" set "EffectiveFrom" = ${q(monthStart)}::timestamptz
+    where "TenantId" = ${q(tenantId)} and "EffectiveFrom" > ${q(monthStart)}::timestamptz;
+    insert into "FeeChallanGenerationRuns" ("Id", "TenantId", "NextRunAt", "LastRunAt", "IsCompleted", "CreatedDate", "CreatedBy")
+    values (gen_random_uuid(), ${q(tenantId)}, now(), ${q(lastRun)}::timestamptz, true, now(), 'qa-setup')
+    on conflict ("TenantId") do update set "LastRunAt" = excluded."LastRunAt", "NextRunAt" = now();`);
 }
 
 export async function createSchoolPolicy(owner: CampusOwner, o: PolicyOptions = {}): Promise<{ id: string; status: number; body: any }> {
@@ -294,6 +317,7 @@ export async function challans(tenantId: string, where = 'true'): Promise<Challa
 /** Polls until the tenant has at least `count` challans matching `where` (the scheduler ticks every minute). */
 export async function waitForChallans(tenantId: string, count: number, where = 'true', timeout = 240_000): Promise<ChallanRow[]> {
   let found: ChallanRow[] = [];
+  if ((await challans(tenantId, where)).length < count) await armTodaysRun(tenantId);
   await expect
     .poll(async () => (found = await challans(tenantId, where)).length, {
       message: `scheduler never issued ${count} challan(s) (${where}) for tenant ${tenantId}`,
@@ -306,6 +330,8 @@ export async function waitForChallans(tenantId: string, count: number, where = '
 
 /** Waits for one more full scheduler pass over the tenant (its run row's ModifiedDate moves on). */
 export async function waitForSchedulerPass(tenantId: string, timeout = 180_000): Promise<void> {
+  // On a generation day the tenant stays a scheduler candidate all day; on an off-day only an armed run makes it one again.
+  await armTodaysRun(tenantId);
   const before = (await sql(`select coalesce("ModifiedDate", "CreatedDate") from "FeeChallanGenerationRuns" where "TenantId" = ${q(tenantId)}`))[0]?.[0] ?? '';
   await expect
     .poll(async () => (await sql(`select coalesce("ModifiedDate", "CreatedDate") from "FeeChallanGenerationRuns" where "TenantId" = ${q(tenantId)}`))[0]?.[0] ?? '', {

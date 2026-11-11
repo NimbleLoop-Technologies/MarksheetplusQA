@@ -13,7 +13,8 @@ import { newCampusOwner, type CampusOwner } from '../../../fixtures/campus-owner
 import * as f from '../../../fixtures/fees';
 import { BackLinkedPage, DefaultersPage, FamilyAccountPage, FeePaymentPage, ReceiveDrawer, ROUTES, signInToWebApp } from '../../../pages/fees/AccountOffice';
 
-const EV = '/workspace/qa-cycles/pr-555/cycle-1/evidence';
+// Evidence folder of the QA cycle running the suite (QA_EVIDENCE_DIR), defaulting to cycle 1's.
+const EV = process.env.QA_EVIDENCE_DIR ?? '/workspace/qa-cycles/pr-555/cycle-1/evidence';
 const CYCLE = '2026-11-01';
 
 test.describe.configure({ mode: 'default' });
@@ -201,6 +202,8 @@ test('AC4 UI (Umair 11-03): Defaulters "Receive" opens the family with every stu
   }
   await page.screenshot({ path: `${EV}/ui-defaulters-receive-family-page.png`, fullPage: true });
   // Each student's link collects that student's own challan.
+  // Cycle 2 N1: reached from Defaulters (client-side navigation), the student's /receive?challanId= route loads but its drawer never
+  // opens (6/6 on 7e9258fd, 3/3 with the cycle-1 WebApp 9e957279); a direct load of the same URL opens it.
   await familyPage.studentChallanLink(new RegExp(`^Receive ${bravo.name}$`, 'i')).click();
   await expect(page).toHaveURL(/\/receive\?challanId=/);
   const drawer = new ReceiveDrawer(page);
@@ -292,6 +295,16 @@ test('C3 Fee Payment "Families with dues" counts families, not student rows, in 
   const families = new Set((await f.pending(owner.api)).items.map((i) => i.familyId)).size;
   await page.screenshot({ path: `${EV}/C3-families-with-dues-tile.png` });
   await expect(list.tile('Families with dues')).toContainText(String(families));
+  // z94x8ecuum: the Overdue tile ("N families") counts distinct overdue families too.
+  const pending = await f.pending(owner.api);
+  const overdueFamilies = new Set(pending.items.filter((i: any) => /overdue/i.test(String(i.status ?? ''))).map((i) => i.familyId)).size;
+  console.log(`C3 summary=${JSON.stringify(pending.summary)} distinctFamilies=${families} overdueFamilies=${overdueFamilies} rows=${pending.items.length}`);
+  // The summary keeps its field names (pendingChallans, overdueChallans) but now carries family counts.
+  expect.soft(pending.summary.pendingChallans, 'API summary families with dues').toBe(families);
+  expect.soft(pending.summary.overdueChallans, 'API summary overdue families').toBe(overdueFamilies);
+  // 'Overdue' is also a status option and a row badge, so the tile is read by its data-tile hook.
+  await expect(page.locator('[data-tile="overdue"]')).toContainText(new RegExp(`\\b${overdueFamilies} famil`));
+  await page.screenshot({ path: `${EV}/C3-tiles-overdue-families.png` });
 });
 
 test('AC4 switching student -> family: issued student challans stay per student, the next cycle is combined', async () => {

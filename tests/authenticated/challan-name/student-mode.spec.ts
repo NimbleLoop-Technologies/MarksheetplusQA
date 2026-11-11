@@ -13,7 +13,8 @@ import { DefaultersPage, FamilyAccountPage, FeePaymentPage, ReceiveDrawer, ROUTE
 import { newCampusOwner, type CampusOwner } from '../../../fixtures/campus-owner';
 import * as f from '../../../fixtures/fees';
 
-const EV = '/workspace/qa-cycles/pr-555/cycle-1/evidence';
+// Evidence folder of the QA cycle running the suite (QA_EVIDENCE_DIR), defaulting to cycle 1's.
+const EV = process.env.QA_EVIDENCE_DIR ?? '/workspace/qa-cycles/pr-555/cycle-1/evidence';
 const CHALLAN_NUMBER = /^\d{4}-\d{4}$/;
 
 // Tests run in file order on one worker; a failed test restarts the worker and the cached campus is reused.
@@ -95,7 +96,8 @@ test('AC3 pending list: one row per student, named by the student, amounts from 
     expect(row.challanNumber).toBe(challanOf(s).number);
   }
   expect(page.summary.amountOutstanding).toBe(5500);
-  expect(page.summary.pendingChallans).toBe(4);
+  // 4 student rows from 2 families: the summary counts families (z94x8ecuum).
+  expect(page.summary.pendingChallans).toBe(2);
 });
 
 test('AC3 scoped outstanding: ?challanId= is that student only; the family read lists each student challan', async () => {
@@ -205,6 +207,11 @@ test('C1 malformed challanId / familyId on outstanding and challan-prints answer
     ['payment ?challanId=not-a-guid', () => f.pay(owner.api, alpha.familyId, 100, { challanId: 'not-a-guid' }), [400]],
     ['payment challanId=""', () => f.pay(owner.api, alpha.familyId, 100, { challanId: '' }), [400]],
   ], 'C1-malformed-ids.txt');
+  // z94x8ecuuk: a malformed or empty challanId on payment is an unknown student challan, not a generic failure.
+  for (const challanId of ['not-a-guid', '']) {
+    const res = await f.pay(owner.api, alpha.familyId, 100, { challanId });
+    expect.soft(await res.text(), `payment challanId="${challanId}" message`).toContain('Student challan not found for this family.');
+  }
 });
 
 test('EDGE scheduler re-runs in the same cycle do not duplicate student challans', async () => {
