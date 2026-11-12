@@ -63,7 +63,7 @@ test.afterAll(async () => {
   await owner?.api.dispose();
 });
 
-test('AC3 one numbered challan per student, only that student\'s charges, snapshot flag set', async () => {
+test('AC3 one numbered challan per student, only that student\'s charges, snapshot flag set', { tag: '@smoke' }, async () => {
   expect(issued).toHaveLength(4);
   for (const [s, amount] of [[alpha, 1000], [bravo, 2500], [charlie, 1000], [solo, 1000]] as const) {
     const c = challanOf(s);
@@ -161,7 +161,7 @@ test('AC5 double submit (same clientPaymentId) records one payment', async () =>
   expect((await f.remainingByChallan(owner.tenantId))[challanOf(charlie).id]).toBe(800);
 });
 
-test('AC5 a student payment never settles a sibling or another family; amount above the scope is refused', async () => {
+test('AC5 a student payment never settles a sibling or another family; amount above the scope is refused', { tag: '@smoke' }, async () => {
   const before = await f.remainingByChallan(owner.tenantId);
   const res = await f.pay(owner.api, alpha.familyId, 5000, { challanId: challanOf(alpha).id });
   // Over-payment beyond the student's dues: refused with a validation message, or capped to the student's dues — never spread to siblings.

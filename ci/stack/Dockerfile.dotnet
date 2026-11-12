@@ -1,0 +1,10 @@
+# Runtime image for a `dotnet publish` output directory (build context = that directory).
+# Mirrors the runtime stage of MarksheetPlus deploy/Dockerfile.{api,authapp,worker}; the build itself
+# happens on the runner (ci/run-regression.sh) so the private NuGet feed credentials never enter Docker.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+ARG APP_DLL
+ENV APP_DLL=${APP_DLL}
+WORKDIR /app
+COPY . /app
+# Trust the edge's local CA (caddydata volume) in addition to the system bundle, then start the app.
+ENTRYPOINT ["/bin/sh", "-c", "r=/caddy-data/caddy/pki/authorities/local/root.crt; i=0; while [ ! -s $r ] && [ $i -lt 120 ]; do i=$((i+1)); sleep 1; done; [ -s $r ] || { echo \"edge CA $r missing\" >&2; exit 1; }; cat /etc/ssl/certs/ca-certificates.crt $r > /tmp/ca-bundle.pem; export SSL_CERT_FILE=/tmp/ca-bundle.pem; exec dotnet /app/$APP_DLL"]

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# psql shim for the CI stack. Fixtures call `psql -h <host> -p <port> -U <user> -d <db>` with PGPASSWORD
+# set from QA_PG_*. -U, -d and the rest of the psql arguments are forwarded. PGPASSWORD is forwarded into
+# the container when the caller set it. -h and -p are dropped: they name the host's view of Postgres,
+# which is not published; the command runs inside the stack's postgres container over its local socket.
+set -euo pipefail
+: "${QA_CI_COMPOSE_PROJECT:?QA_CI_COMPOSE_PROJECT is not set (export it from ci/run-regression.sh)}"
+args=()
+while (($#)); do
+	case "$1" in
+		-h|-p) shift 2 ;;
+		-h*|-p*|--host=*|--port=*) shift ;;
+		*) args+=("$1"); shift ;;
+	esac
+done
+cid="$(docker ps -q -f "label=com.docker.compose.project=$QA_CI_COMPOSE_PROJECT" -f "label=com.docker.compose.service=postgres" | head -n1)"
+[[ -n "$cid" ]] || { echo "psql shim: no running postgres container in compose project $QA_CI_COMPOSE_PROJECT" >&2; exit 1; }
+exec_args=(-i)
+[[ -n "${PGPASSWORD:-}" ]] && exec_args+=(-e "PGPASSWORD=${PGPASSWORD}")
+exec docker exec "${exec_args[@]}" "$cid" psql "${args[@]}"

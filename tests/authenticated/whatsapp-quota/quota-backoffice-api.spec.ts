@@ -37,7 +37,7 @@ test.afterAll(async () => {
 const uniquePlanName = () => `QA538 Plan ${Math.random().toString(36).slice(2, 8)}`;
 
 test.describe('permissions', () => {
-  test('a signed-in campus owner (not an operator) is forbidden from reading back-office quota data', async () => {
+  test('a signed-in campus owner (not an operator) is forbidden from reading back-office quota data', { tag: '@smoke' }, async () => {
     const session = await (await campusOwner()).authAppSession();
     try {
       for (const path of ['quota-packages', 'quota-requests', 'plans']) {

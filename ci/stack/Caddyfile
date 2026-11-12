@@ -1,0 +1,52 @@
+# Edge proxy for the CI stack. Every app listens on 127.0.0.1:808x inside the shared network
+# namespace; Caddy serves them as https://localhost:<public port> with a certificate from its own
+# throwaway local CA (generated into the caddydata volume on first start; the .NET containers add
+# that root to their trust bundle so the RestApi can fetch the AuthApp's JWKS over https).
+{
+	admin off
+	skip_install_trust
+	local_certs
+	auto_https disable_redirects
+}
+
+# The AuthApp/RestApi OTP limiter allows 30 register/verify calls per client IP per 15 minutes
+# (MarksheetPlus.Features/Setup.cs AddOtpRateLimiter). In CI every request comes from 127.0.0.1, and a
+# full regression run registers far more throwaway owners/parents than that, so the edge gives each
+# client TCP connection its own private IPv6 address in X-Forwarded-For (the apps trust forwarded
+# headers from any proxy). Effect: the per-IP OTP limit is not exercised by this stack. Set
+# QA_CI_SPREAD_CLIENT_IPS=false to send the real loopback address instead.
+(proxy) {
+	map {env.QA_CI_SPREAD_CLIENT_IPS}{http.request.remote.port} {ci_xff} {
+		~^true(\d*?)(\d{1,4})$ "fd00::1${1}:${2}"
+		default {http.request.remote.host}
+	}
+	reverse_proxy {args[0]} {
+		header_up X-Forwarded-For {ci_xff}
+	}
+}
+
+https://localhost:{$API_PORT} {
+	tls internal
+	import proxy 127.0.0.1:8081
+}
+
+https://localhost:{$AUTH_PORT} {
+	tls internal
+	import proxy 127.0.0.1:8082
+}
+
+https://localhost:{$WEB_PORT} {
+	tls internal
+	# Public object reads (campus logos), same as deploy/Caddyfile.
+	handle_path /files/* {
+		reverse_proxy minio:9000
+	}
+	handle {
+		import proxy 127.0.0.1:8083
+	}
+}
+
+https://localhost:{$FAMILY_PORT} {
+	tls internal
+	import proxy 127.0.0.1:8084
+}

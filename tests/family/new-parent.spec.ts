@@ -48,7 +48,7 @@ async function registerFromInviteLink(context: BrowserContext, whatsAppNumber: s
 test.describe.configure({ timeout: 120_000 });
 
 test.describe('Invite codes for a parent without an account', () => {
-  test('a parent who registers from the invite link is sent through family setup, back to the code, and can connect the child (AC3)', async ({ anonContext, adminPage }) => {
+  test('a parent who registers from the invite link is sent through family setup, back to the code, and can connect the child (AC3)', { tag: '@smoke' }, async ({ anonContext, adminPage }) => {
     const phone = uniquePakistaniMobile();
     const student = await seedStudent({ parentPhone: phone });
     const code = await issueCode(adminPage, student);
@@ -81,7 +81,7 @@ test.describe('Invite codes for a parent without an account', () => {
     await expect(dashboard.child(student.fullName)).toHaveCount(1);
   });
 
-  test('after 5 wrong codes the parent is locked out, even for a valid code', async ({ anonContext, adminPage }) => {
+  test('after 5 wrong codes the parent is locked out, even for a valid code', { tag: '@smoke' }, async ({ anonContext, adminPage }) => {
     test.slow();
     const phone = uniquePakistaniMobile();
     const student = await seedStudent({ parentPhone: phone });

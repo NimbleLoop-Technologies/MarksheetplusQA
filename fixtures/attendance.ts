@@ -20,6 +20,7 @@ const run = promisify(execFile);
 export const REST_API = process.env.QA_REST_API_URL ?? 'https://localhost:7244';
 const PG = {
   host: process.env.QA_PG_HOST ?? 'localhost',
+  port: process.env.QA_PG_PORT ?? '5432',
   user: process.env.QA_PG_USER ?? 'postgres',
   db: process.env.QA_PG_SCHOOL_DB ?? 'mp-shared-schools-db',
   password: process.env.QA_PG_PASSWORD ?? 'admin123',
@@ -75,7 +76,7 @@ export function dayLabel(isoDate: string): string {
 // ── Postgres ────────────────────────────────────────────────────────────────────────────────
 
 async function psql(sql: string): Promise<string[]> {
-  const { stdout } = await run('psql', ['-h', PG.host, '-U', PG.user, '-d', PG.db, '-q', '-At', '-F', '|', '-c', sql], {
+  const { stdout } = await run('psql', ['-h', PG.host, '-p', PG.port, '-U', PG.user, '-d', PG.db, '-q', '-At', '-F', '|', '-c', sql], {
     env: { ...process.env, PGPASSWORD: PG.password },
     timeout: 30_000,
   });

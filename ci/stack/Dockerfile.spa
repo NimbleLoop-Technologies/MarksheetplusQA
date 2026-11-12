@@ -1,0 +1,10 @@
+# Static Blazor WASM host for a published wwwroot (build context = that wwwroot, appsettings.json already
+# rewritten by ci/run-regression.sh). Mirrors deploy/Dockerfile.{web,familyapp}'s nginx stage, but listens
+# on LISTEN_PORT so web and familyapp can share the edge network namespace.
+FROM nginxinc/nginx-unprivileged:alpine
+ARG LISTEN_PORT=8080
+USER root
+COPY --chown=101:101 . /usr/share/nginx/html
+RUN rm -f /usr/share/nginx/html/appsettings.json.gz /usr/share/nginx/html/appsettings.json.br && \
+    printf 'server {\n  listen 127.0.0.1:%s;\n  root /usr/share/nginx/html;\n  index index.html;\n  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n' "$LISTEN_PORT" > /etc/nginx/conf.d/default.conf
+USER 101

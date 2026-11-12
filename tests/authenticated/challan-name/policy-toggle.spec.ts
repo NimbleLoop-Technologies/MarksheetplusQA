@@ -54,7 +54,7 @@ async function classPolicyId(): Promise<string> {
   return created.id;
 }
 
-test('AC1 school policy set-up: the "Challan name" switch is off by default, keyboard operable, and saved with the policy', async ({ page }) => {
+test('AC1 school policy set-up: the "Challan name" switch is off by default, keyboard operable, and saved with the policy', { tag: '@smoke' }, async ({ page }) => {
   await signInToWebApp(page, owner.credentials());
   const editor = new FeePolicyEditor(page);
   await editor.open(ROUTES.newSchoolPolicy);
@@ -135,7 +135,7 @@ test('AC1 no switch on class policies: add, edit and duplicate; the class policy
   await page.screenshot({ path: `${EV}/ui-policy-class-duplicate-no-toggle.png`, fullPage: true });
 });
 
-test('AC1 a crafted class-policy request cannot set the switch (create and update store false; root decides)', async () => {
+test('AC1 a crafted class-policy request cannot set the switch (create and update store false; root decides)', { tag: '@smoke' }, async () => {
   const rootNow = await f.latestPolicyVersion(await rootPolicyId());
   if (rootNow.perStudent) expect((await f.updatePolicy(owner, rootNow.id, { generateChallansPerStudent: false })).status()).toBe(200);
   const created = await f.createClassPolicy(owner, (await f.latestPolicyVersion(rootNow.id)).id, [seed.school.classes[1].id], { tuition: 900, perStudent: true });
