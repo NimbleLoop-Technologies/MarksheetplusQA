@@ -109,6 +109,17 @@ export default defineConfig({
       dependencies: ['setup'],
     },
     {
+      // PR 557 (ClickUp z94x8ed10y) Payments screen removed; "View coming next cycle" on the Fees cards.
+      // Self-seeding: one throwaway campus + a fresh parent linked by invite code; waits for the Worker's
+      // challan scheduler and the family fee mirror (mp-familyapp-db via QA_PG_*). Local stack only, --workers=1.
+      name: 'family-fees',
+      testDir: './tests/family-fees',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 4 * 60_000,
+      use: { ...devices['Desktop Chrome'], baseURL: familyURL },
+    },
+    {
       name: 'family-setup',
       testDir: './fixtures',
       testMatch: /.*\.family-setup\.ts/,
