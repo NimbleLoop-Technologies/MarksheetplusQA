@@ -120,6 +120,17 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], baseURL: familyURL },
     },
     {
+      // PR 558 (ClickUp 86exmwjgc + 86extv6wg) Bookshop Stock Movements log and its CSV export. Self-seeding: one
+      // throwaway campus with items, variants and dated movements (API), a second campus for tenant checks, and
+      // role stand-ins in Postgres/Mongo for the permission cases. Local stack only (QA_PG_*, QA_MONGOSH), --workers=1.
+      name: 'bookshop',
+      testDir: './tests/bookshop',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 4 * 60_000,
+      use: { ...devices['Desktop Chrome'], acceptDownloads: true },
+    },
+    {
       name: 'family-setup',
       testDir: './fixtures',
       testMatch: /.*\.family-setup\.ts/,

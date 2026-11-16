@@ -323,13 +323,15 @@ has_feature() { # has_feature <project>
 		challan-name) grep -rqsF "Generate challans under student name" "$SRC" --include=*.cs --include=*.razor ;;
 		# PR 557 (Payments screen removed, CU-z94x8ed10y): the per-child next-cycle toggle on the Fees page.
 		family-fees) grep -rqsF "View coming next cycle" "$SRC" --include=*.razor ;;
+		# PR 558 (Stock Movements log + CSV export, CU-86exmwjgc / CU-86extv6wg): the log's empty-filter copy.
+		bookshop) grep -rqsF "No stock movements match your filters." "$SRC" --include=*.razor ;;
 		*) return 0 ;;
 	esac
 }
 if [[ "$QA_CI_SUITES" == auto ]]; then
 	SUITES=()
 	# challan-name waits on the 1-minute fee scheduler (~12 min per file) and must run at --workers=1.
-	for p in setup anonymous authenticated shell-notes whatsapp-quota challan-name attendance-backdating family-fees family-setup family; do
+	for p in setup anonymous authenticated shell-notes whatsapp-quota challan-name attendance-backdating family-fees bookshop family-setup family; do
 		if has_feature "$p"; then SUITES+=("$p"); else warn "skipping project $p: this MarksheetPlus checkout does not contain its feature yet"; fi
 	done
 else
