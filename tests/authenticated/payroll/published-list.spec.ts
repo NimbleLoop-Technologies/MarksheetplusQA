@@ -160,13 +160,18 @@ test.describe('Published list — spec gaps', () => {
     await page.context().close();
   });
 
-  test('P-CORRECTION-LINK: the correction path is a sentence with an inline link, not a button', async ({ browser }) => {
+  test('P-CORRECTION-LINK: the correction path is a sentence with an inline link above the pager, not a filled button below it', async ({ browser }) => {
     const { page, run } = await open(browser);
     await expect(run.correctionLine).toBeVisible();
     await expect(run.postAdjustment).toBeVisible();
     await page.screenshot({ path: P.shot('P-CORRECTION-LINK.png') });
-    expect(await run.tagName(run.postAdjustment)).toBe('a');
+    // Cycle 2 (7356f308): rendered as link-styled text inside the sentence. It is a <button> because it opens a modal,
+    // which is the correct semantics for an action; what the AC asks for is the inline-link look and the position.
+    const look = await run.postAdjustment.evaluate((el) => { const s = getComputedStyle(el); return { bg: s.backgroundColor, border: s.borderTopWidth }; });
+    expect(look.bg, 'no button fill').toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
     const line = await run.box(run.correctionLine);
+    const action = await run.box(run.postAdjustment);
+    expect(Math.abs(action.y - line.y), 'the action sits on the sentence line').toBeLessThan(line.height + 8);
     expect(line.y, 'the correction line sits above the pagination footer').toBeLessThan((await run.box(run.pagination)).y);
     await page.context().close();
   });

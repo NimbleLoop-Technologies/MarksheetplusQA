@@ -278,11 +278,20 @@ test.describe('Adjustment — posting', () => {
 
   test('P-ADJ-REGISTER: the adjustment appears in the Incentives & Deductions Register', async ({ browser }) => {
     await ensurePublished();
-    const page = await P.openApp(browser, w, '/accounts/staff-payroll/incentives-and-deductions');
-    const run = new PayrollRunPage(page);
-    await expect(run.title).toBeVisible();
-    await page.screenshot({ path: P.shot('P-ADJ-REGISTER-library-page.png'), fullPage: true });
-    await expect(run.text('Fuel allowance unticked in error at run time')).toBeVisible();
+    // Cycle 2 (7356f308): the register is its own page, reached from the Incentives & deductions library ("Register").
+    if ((await adjustments(w.data.sana.id)).length === 0) {
+      const res = await P.postAdjustment(w.owner.api, w.data.runId, { staffMemberId: w.data.sana.id, direction: 'PayMore', amount: 500, reason: 'Register check', submissionId: sid() });
+      expect(res.status(), await res.text()).toBe(200);
+    }
+    const page = await P.openApp(browser, w, '/accounts/staff-payroll/incentives-and-deductions/register');
+    await expect(page.getByRole('heading', { name: 'Incentives & deductions register' })).toBeVisible({ timeout: 30_000 });
+    const table = page.locator('[data-register-table]');
+    await expect(table).toBeVisible({ timeout: 30_000 });
+    const posted = await adjustments(w.data.sana.id);
+    expect(posted.length, 'this file posted adjustments for Sana').toBeGreaterThan(0);
+    await expect(table).toContainText(posted[0].reason);
+    await expect(table).toContainText(/Adjustment: (recover|pay more)/);
+    await page.screenshot({ path: P.shot('P-ADJ-REGISTER-register-page.png'), fullPage: true });
     await page.context().close();
   });
 });

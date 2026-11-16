@@ -266,7 +266,7 @@ export async function generateAndPublish(api: APIRequestContext): Promise<string
 }
 
 /** Writes a probe output (API / SQL) to the cycle's evidence folder. Never pass tokens or passwords. */
-export const EVIDENCE_DIR = process.env.QA_EVIDENCE_DIR ?? '/workspace/qa-cycles/pr-544/cycle-1/evidence';
+export const EVIDENCE_DIR = process.env.QA_EVIDENCE_DIR ?? path.resolve(__dirname, '..', 'test-results', 'evidence');
 export async function saveEvidence(name: string, content: string) {
   mkdirSync(EVIDENCE_DIR, { recursive: true });
   writeFileSync(path.join(EVIDENCE_DIR, name), content);

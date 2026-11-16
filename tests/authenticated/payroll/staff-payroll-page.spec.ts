@@ -54,7 +54,7 @@ test.describe('Staff Payroll page — month card states', () => {
     const page = await P.openApp(browser, w);
     const ui = new StaffPayrollPage(page);
     await ui.expectLoaded();
-    await page.screenshot({ path: '/workspace/qa-cycles/pr-544/cycle-1/evidence/P-BREADCRUMB-landing.png' });
+    await page.screenshot({ path: P.shot('P-BREADCRUMB-landing.png') });
     await expect(ui.breadcrumb).toBeVisible();
     await expect(ui.breadcrumb).toContainText(/Home.*Account Office.*Staff Payroll/);
     await page.context().close();
@@ -159,7 +159,7 @@ test.describe('Staff Payroll page — month card states', () => {
     const page = await P.openApp(browser, w);
     const ui = new StaffPayrollPage(page);
     await ui.expectMonthCard();
-    await page.screenshot({ path: '/workspace/qa-cycles/pr-544/cycle-1/evidence/P-PUBLISHER-NAME-month-card.png' });
+    await page.screenshot({ path: P.shot('P-PUBLISHER-NAME-month-card.png') });
     await expect(ui.stateLine).toContainText('by Quota Owner.');
     await page.context().close();
   });
@@ -203,9 +203,10 @@ test.describe('Staff Payroll page — loading and load failure', () => {
     await page.route('**/payroll-runs/current', async (route) => { await gate; await route.continue(); });
     await page.reload();
     const ui = new StaffPayrollPage(page);
-    await expect(ui.loadingSkeleton.or(ui.heading)).toBeVisible({ timeout: 30_000 }).catch(() => undefined);
-    await page.screenshot({ path: '/workspace/qa-cycles/pr-544/cycle-1/evidence/P-LANDING-SKELETON-blank-while-loading.png' });
-    await expect(ui.loadingSkeleton).toBeVisible({ timeout: 10_000 });
+    await expect(ui.loadingSkeleton.first().or(ui.heading)).toBeVisible({ timeout: 30_000 }).catch(() => undefined);
+    await page.screenshot({ path: P.shot('P-LANDING-SKELETON-blank-while-loading.png') });
+    // Cycle 2 (7356f308): the month card and the past runs table each render skeleton blocks (several aria-busy regions).
+    await expect(ui.loadingSkeleton.first()).toBeVisible({ timeout: 10_000 });
     release();
     await ui.expectMonthCard();
     await expect(ui.loadingSkeleton).toHaveCount(0);
@@ -218,7 +219,7 @@ test.describe('Staff Payroll page — loading and load failure', () => {
     await page.reload();
     const ui = new StaffPayrollPage(page);
     await expect(ui.loadError()).toBeVisible({ timeout: 30_000 });
-    await page.screenshot({ path: '/workspace/qa-cycles/pr-544/cycle-1/evidence/P-LANDING-LOAD-COPY.png' });
+    await page.screenshot({ path: P.shot('P-LANDING-LOAD-COPY.png') });
     // The rest of Account Office stays usable.
     await expect(ui.navLink()).toBeVisible();
     await expect(ui.retryControl()).toBeVisible();

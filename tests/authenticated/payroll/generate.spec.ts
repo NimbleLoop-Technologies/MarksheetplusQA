@@ -126,7 +126,7 @@ test.describe('Generate Payroll — the register', () => {
     await run.searchFor(w.data.full[2].name);
     await expect(await run.cell(w.data.full[2].name, 'Exceptions')).toHaveText('Full month');
     await expect(run.rowAction(w.data.full[2].name, 'Add exception')).toBeVisible();
-    await page.screenshot({ path: '/workspace/qa-cycles/pr-544/cycle-1/evidence/generate-register-draft.png', fullPage: true });
+    await page.screenshot({ path: P.shot('generate-register-draft.png'), fullPage: true });
     await page.context().close();
   });
 
@@ -196,7 +196,7 @@ test.describe('Generate Payroll — saving and snapshots', () => {
     await run.setUnpaidDays('3');
     await expect(run.saveFailed).toBeVisible();
     await expect(run.saveFailed).toContainText('Not saved. Check your connection.');
-    await page.screenshot({ path: '/workspace/qa-cycles/pr-544/cycle-1/evidence/generate-save-failed-strip.png', fullPage: true });
+    await page.screenshot({ path: P.shot('generate-save-failed-strip.png'), fullPage: true });
     await expect(run.unpaidDays).toHaveValue('3');
     await expect(run.panel).toBeVisible();
     await page.unroute('**/rows/*/absence');
@@ -280,7 +280,7 @@ test.describe('Generate Payroll — spec gaps', () => {
     const page = await P.openApp(browser, w);
     const ui = new StaffPayrollPage(page);
     await ui.expectMonthCard();
-    await page.screenshot({ path: '/workspace/qa-cycles/pr-544/cycle-1/evidence/P-DISCARD-DRAFT-month-card.png' });
+    await page.screenshot({ path: P.shot('P-DISCARD-DRAFT-month-card.png') });
     await expect(ui.discardDraftButton).toBeVisible();
     await page.context().close();
   });

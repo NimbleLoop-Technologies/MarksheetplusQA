@@ -321,13 +321,14 @@ has_feature() { # has_feature <project>
 		attendance-backdating) grep -rqsF "No students were enrolled in this section on this date" "$SRC" --include=*.cs --include=*.razor ;;
 		# PR 547 (challan under family or student name, CU-z94x8eapp5): the fee policy switch it introduced.
 		challan-name) grep -rqsF "Generate challans under student name" "$SRC" --include=*.cs --include=*.razor ;;
+		payroll) [[ -f "$SRC/MarksheetPlus.FeeManagement/StaffPayroll/StaffPayroll.razor" ]] ;;
 		*) return 0 ;;
 	esac
 }
 if [[ "$QA_CI_SUITES" == auto ]]; then
 	SUITES=()
 	# challan-name waits on the 1-minute fee scheduler (~12 min per file) and must run at --workers=1.
-	for p in setup anonymous authenticated shell-notes whatsapp-quota challan-name attendance-backdating family-setup family; do
+	for p in setup anonymous authenticated shell-notes whatsapp-quota challan-name attendance-backdating payroll family-setup family; do
 		if has_feature "$p"; then SUITES+=("$p"); else warn "skipping project $p: this MarksheetPlus checkout does not contain its feature yet"; fi
 	done
 else
