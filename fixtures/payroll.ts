@@ -222,7 +222,9 @@ export async function register(api: APIRequestContext, runId: string, q = 'pageS
 }
 export async function rowFor(api: APIRequestContext, runId: string, staff: Staff | string): Promise<RegisterRow> {
   const id = typeof staff === 'string' ? staff : staff.id;
-  const row = (await register(api, runId)).rows.find((r) => r.staffMemberId === id);
+  let row = (await register(api, runId)).rows.find((r) => r.staffMemberId === id);
+  // A register answers at most 50 lines a page: look a staff member up by name when they are not on the first page.
+  if (!row && typeof staff !== 'string') row = (await register(api, runId, `pageSize=50&search=${encodeURIComponent(staff.name)}`)).rows.find((r) => r.staffMemberId === id);
   expect(row, `row for staff ${id}`).toBeTruthy();
   return row!;
 }
