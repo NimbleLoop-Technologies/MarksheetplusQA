@@ -543,6 +543,26 @@ test.describe('Stock Movements export (86extv6wg)', () => {
     await ctx.close();
   });
 
+  test('picking Custom before both dates are set keeps the rows on screen, and the export still matches them', async ({ browser }) => {
+    const ctx = await ownerContext(browser, A);
+    const page = await openLog(ctx);
+    await expectRowCount(page, 10);
+    await expectTiles(page, [13, 6, 5, 2]);
+    await page.getByRole('combobox', { name: 'Date range' }).selectOption({ label: 'Custom' });
+    await page.waitForTimeout(1000);
+    // The list and tiles stay on the last 30 days (nothing is asked for until both ends are set) ...
+    await expectRowCount(page, 10);
+    await expectTiles(page, [13, 6, 5, 2]);
+    await shot(page, 'custom-unset-before-export', false);
+    // ... so Export should download those 13 rows under the last-30-days name.
+    const csv = await exportCsv(page);
+    console.log(`custom (unset) export: ${csv.name}, ${csv.rows.length - 1} rows; dates ${[...new Set(csv.rows.slice(1).map((r) => r[0]))].join(',')}`);
+    await mkdir(EV, { recursive: true });
+    await writeFile(path.join(EV, 'sm558-export-custom-unset.csv'), csv.raw);
+    expect({ name: csv.name, rows: csv.rows.length - 1 }).toEqual({ name: fileName(b.utcDate(29), b.utcDate(0)), rows: 13 });
+    await ctx.close();
+  });
+
   test('the export follows the sort it is given (API: quantity ascending, item descending)', async () => {
     for (const sort of ['sortBy=quantity&sortDir=asc', 'sortBy=item&sortDir=desc', 'sortBy=user&sortDir=asc']) {
       const res = await A.api.get(`bookshop/stock-movements/export?${last30()}&${sort}`);
