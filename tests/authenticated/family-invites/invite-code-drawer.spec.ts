@@ -3,10 +3,14 @@
  * AC1 (generate a short, unique, shareable code), AC2 (WhatsApp carries code + link), AC9 (regenerate).
  */
 import { test, expect } from '../../../fixtures/family';
-import { expireInvite, inviteWhatsAppsFor, seedStudent, waitForInviteWhatsApp } from '../../../fixtures/devenv';
+import { DEFAULT_PARENT_PHONE, expireInvite, inviteWhatsAppsFor, seedStudent, waitForInviteWhatsApp } from '../../../fixtures/devenv';
 import { StudentsRegisterPage } from '../../../pages/StudentsRegisterPage';
 
 const SCHOOL = 'Testenv High School - Main';
+/** The seeded parent's number in E.164 (the stack's QA_PARENT_PHONE: 03xxxxxxxxx on the box, a fictional +1 number in CI). */
+const PARENT_E164 = DEFAULT_PARENT_PHONE.startsWith('+') ? DEFAULT_PARENT_PHONE : `+92${DEFAULT_PARENT_PHONE.slice(1)}`;
+/** How the drawer masks it: country code + first digit, then stars, then the last two digits ("+92********03"). */
+const PARENT_MASKED = `${PARENT_E164.slice(0, 3)}${'*'.repeat(PARENT_E164.length - 5)}${PARENT_E164.slice(-2)}`;
 /** ABC-DEF; alphabet excludes 0, O, 1, I and L. */
 const CODE_FORMAT = /^[A-HJKMNP-Z2-9]{3}-[A-HJKMNP-Z2-9]{3}$/;
 const SENT = 'Invite code sent. You will see the student connect once the parent enters it.';
@@ -26,7 +30,7 @@ const parseDrawerDate = (text: string) => Date.parse(text.replace(',', ''));
 test.describe.configure({ timeout: 60_000 });
 
 test.describe('Family invite code drawer', () => {
-  test('generating a code shows a 6-character ABC-DEF code from the unambiguous alphabet', async ({ page, student }) => {
+  test('generating a code shows a 6-character ABC-DEF code from the unambiguous alphabet', { tag: '@smoke' }, async ({ page, student }) => {
     const register = new StudentsRegisterPage(page);
     await register.goto();
     const drawer = await register.openFamilyInviteDrawer(student);
@@ -36,7 +40,7 @@ test.describe('Family invite code drawer', () => {
 
     expect(code).toMatch(CODE_FORMAT);
     await expect(drawer.notice).toHaveText(SENT);
-    await expect(drawer.detail('Sent to')).toHaveText('+92********03');
+    await expect(drawer.detail('Sent to')).toHaveText(PARENT_MASKED);
   });
 
   test('a new code expires 3 days after it is generated', async ({ page, student }) => {
@@ -62,14 +66,14 @@ test.describe('Family invite code drawer', () => {
     expect(new Set(sends.map((s) => s.body[2]))).toEqual(new Set([student.firstName]));
   });
 
-  test('the WhatsApp invite carries the school, parent, child first name, code, expiry and the bare code for the /join?code= button', async ({ page, student }) => {
+  test('the WhatsApp invite carries the school, parent, child first name, code, expiry and the bare code for the /join?code= button', { tag: '@smoke' }, async ({ page, student }) => {
     const register = new StudentsRegisterPage(page);
     await register.goto();
     const drawer = await register.openFamilyInviteDrawer(student);
     const code = await drawer.generate();
 
     const message = await waitForInviteWhatsApp(code);
-    expect(message.to).toBe('+923000000003');
+    expect(message.to).toBe(PARENT_E164);
     expect(message.header).toBe(SCHOOL);
     const [parent, school, child, sentCode, expiry] = message.body;
     expect(parent).toBe('Imran Khan');
@@ -97,7 +101,7 @@ test.describe('Family invite code drawer', () => {
     });
   });
 
-  test('Resend re-sends the same code and is disabled once the 3-per-24h allowance is used', async ({ page, student }) => {
+  test('Resend re-sends the same code and is disabled once the 3-per-24h allowance is used', { tag: '@smoke' }, async ({ page, student }) => {
     const register = new StudentsRegisterPage(page);
     await register.goto();
     const drawer = await register.openFamilyInviteDrawer(student);

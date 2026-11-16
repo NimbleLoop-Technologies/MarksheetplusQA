@@ -440,3 +440,12 @@ playwright/.cache/
 # QA run artifacts
 test-results-run*/
 test-results-run*.log
+
+# CI entry point scratch + artifacts (ci/run-regression.sh)
+.ci-work/
+ci-artifacts/
+# Committed on purpose: throwaway CI stack accounts/config and the container shims
+!ci/qa-data/accounts.env
+!ci/stack/stack.env
+!ci/bin/
+!ci/bin/*

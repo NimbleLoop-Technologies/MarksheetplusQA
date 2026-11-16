@@ -52,8 +52,9 @@ export default defineConfig({
     {
       name: 'authenticated',
       testDir: './tests/authenticated',
-      // shell-notes and payroll have their own projects (self-seeded tenants, no retries).
-      testIgnore: /(shell-notes|payroll)\//,
+      // shell-notes, payroll and whatsapp-quota have their own projects (whatsapp-quota self-seeds; no .auth/user.json).
+      // attendance-backdating and challan-name need the local stack's Postgres and run serially (projects below).
+      testIgnore: [/shell-notes\//, /payroll\//, /whatsapp-quota\//, /attendance-backdating\//, /challan-name\//],
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
@@ -82,6 +83,43 @@ export default defineConfig({
       fullyParallel: false,
       timeout: 3 * 60_000,
       use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      // PR 538 WhatsApp quota. Self-seeding: each spec registers a throwaway owner + campus via the
+      // AuthApp/RestApi and signs the back-office operator in from QA_BACKOFFICE_EMAIL/PASSWORD.
+      // Local stack only (Mongo preconditions, worker log). Run with --workers=1.
+      name: 'whatsapp-quota',
+      testDir: './tests/authenticated/whatsapp-quota',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 10 * 60_000,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      // PR 547 (ClickUp z94x8eapp5) challans under family or student name. Self-seeding: each spec file
+      // registers its own throwaway owner + trial campus (fixtures/campus-owner.ts) and waits for the
+      // Worker's 1-minute challan scheduler. Local stack only (netns qa555, psql). Run with --workers=1.
+      name: 'challan-name',
+      testDir: './tests/authenticated/challan-name',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 12 * 60_000,
+      expect: { timeout: 15_000 },
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      // PR 548 back-dated attendance. Self-seeding: each file creates a "QA548 <suffix>" class and back-dates its
+      // sections in Postgres (QA_PG_*). Local stack only; run inside the PR netns with --workers=1.
+      name: 'attendance-backdating',
+      testDir: './tests/authenticated/attendance-backdating',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 3 * 60_000,
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: path.join(__dirname, '.auth', 'user.json'),
+      },
+      dependencies: ['setup'],
     },
     {
       name: 'family-setup',

@@ -11,11 +11,12 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { randomInt } from 'node:crypto';
+import path from 'node:path';
 import { expect } from '@playwright/test';
 
 const run = promisify(execFile);
 
-const SEED_SCRIPT = process.env.QA_SEED_SCRIPT ?? '/workspace/devenv/seed.sh';
+const SEED_SCRIPT = process.env.QA_SEED_SCRIPT ?? path.resolve(__dirname, '..', 'ci', 'qa-data', 'seed.sh');
 const WORKER_LOG = process.env.QA_WORKER_LOG || '/workspace/devenv/worker.log';
 const MONGO_URL = process.env.QA_MONGO_URL ?? 'mongodb://localhost:27017/mp-accounts-db';
 /** The seeded parent account's number. Students seeded with it land in that parent's lobby. */
@@ -170,7 +171,7 @@ export async function workerLogLines(pattern: RegExp): Promise<string[]> {
 // ── Mongo (school plane invites) ──────────────────────────────────────────────────────────────
 
 async function mongo(script: string): Promise<string> {
-  const { stdout } = await run('npx', ['-y', 'mongosh', MONGO_URL, '--quiet', '--eval', script], { timeout: 120_000 });
+  const { stdout } = await run(...mongoshCommand(MONGO_URL, script), { timeout: 120_000 });
   return stdout.trim();
 }
 
@@ -209,7 +210,7 @@ export async function expireInvite(studentId: string): Promise<string> {
 
 // ── Fresh family parents (AC5–AC7 need a family nobody else touches) ─────────────────────────
 
-const PARENT_SCRIPT = process.env.QA_PARENT_SCRIPT ?? '/workspace/devenv/parent.sh';
+const PARENT_SCRIPT = process.env.QA_PARENT_SCRIPT ?? path.resolve(__dirname, '..', 'ci', 'qa-data', 'parent.sh');
 const REST_API = process.env.QA_REST_API_URL ?? 'https://localhost:7244';
 
 export interface FreshParent {
@@ -309,4 +310,10 @@ export async function ownChildren(parent: FreshParent): Promise<OwnChild[]> {
  */
 export function callFamilyApi(parent: FreshParent, method: 'GET' | 'POST', route: string, body?: unknown) {
   return parentApi(parent, method, route, body);
+}
+
+/** `QA_MONGOSH=/path/to/mongosh` skips `npx -y` (needed inside an offline network namespace). */
+function mongoshCommand(url: string, script: string): [string, string[]] {
+  const bin = process.env.QA_MONGOSH;
+  return bin ? [bin, [url, '--quiet', '--eval', script]] : ['npx', ['-y', 'mongosh', url, '--quiet', '--eval', script]];
 }

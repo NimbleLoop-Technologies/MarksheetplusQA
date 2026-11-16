@@ -87,8 +87,38 @@ export async function newCampusOwner(label = 'qa'): Promise<CampusOwner> {
   const tenantId = (await campus.json()).tenantId as string;
   await auth.dispose();
 
-  let token = await restApiLogin(phone, password);
+  const token = await restApiLogin(phone, password);
   expect(jwtClaim(token, 'tenant')).toBe(tenantId);
+  return buildOwner({ email, phone, tenantId, schoolName, token, password });
+}
+
+/** Everything needed to rebuild a CampusOwner in a restarted worker. Holds the password: write it only to the gitignored test output (mode 0600). */
+export interface CachedOwner {
+  email: string;
+  phone: string;
+  tenantId: string;
+  schoolName: string;
+  token: string;
+  password: string;
+}
+
+/** Re-creates a CampusOwner from cacheOwner() output (same token; refreshToken() logs in again). */
+export async function ownerFromCache(c: CachedOwner): Promise<CampusOwner> {
+  return buildOwner(c);
+}
+
+const OWNER_CACHE = new WeakMap<CampusOwner, CachedOwner>();
+
+/** The serialisable form of an owner made by newCampusOwner()/ownerFromCache(). */
+export function cacheOwner(owner: CampusOwner): CachedOwner {
+  const c = OWNER_CACHE.get(owner);
+  if (!c) throw new Error('owner was not created by newCampusOwner');
+  return { ...c, token: owner.token };
+}
+
+async function buildOwner(c: CachedOwner): Promise<CampusOwner> {
+  const { email, phone, tenantId, schoolName, password } = c;
+  let token = c.token;
   const owner: CampusOwner = {
     email, phone, tenantId, schoolName, token,
     userId: jwtClaim(token, 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier')!,
@@ -107,6 +137,7 @@ export async function newCampusOwner(label = 'qa'): Promise<CampusOwner> {
       return c;
     },
   };
+  OWNER_CACHE.set(owner, { email, phone, tenantId, schoolName, token, password });
   return owner;
 }
 

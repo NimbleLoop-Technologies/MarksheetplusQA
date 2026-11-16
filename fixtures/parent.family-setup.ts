@@ -4,7 +4,7 @@ import { LoginPage } from '../pages/LoginPage';
 
 const authFile = path.join(__dirname, '..', '.auth', 'parent.json');
 
-setup('authenticate family parent', async ({ page }) => {
+setup('authenticate family parent', { tag: '@smoke' }, async ({ page }) => {
   const email = process.env.QA_PARENT_EMAIL;
   const password = process.env.QA_PARENT_PASSWORD;
   if (!email || !password) throw new Error('QA_PARENT_EMAIL / QA_PARENT_PASSWORD missing from .env');
