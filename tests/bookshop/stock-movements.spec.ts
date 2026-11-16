@@ -1,6 +1,6 @@
 /**
  * PR 558 / ClickUp 86exmwjgc "View Stock Movements Log" and 86extv6wg "Export Stock Movements to CSV".
- *  Log:    sidebar/tab entry, breadcrumb, Item Detail "View all" deep link, Last 30 days default (inclusive), reason
+ *  Log:    sidebar/tab entry, (breadcrumb waived 2026-11-16), Item Detail "View all" deep link, Last 30 days default (inclusive), reason
  *          multi-select, item search (name, SKU, variant SKU), KPI strip follows every filter, Date desc default,
  *          sortable Date/Item/Reason/Quantity/User, Notes tooltip, Item link, empty/invalid-range/network/denied copy.
  *  Export: the current filters + sort, file name, column order and labels, YYYY-MM-DD + ISO 8601, empty toast,
@@ -237,7 +237,9 @@ test.describe('Stock Movements log (86exmwjgc)', () => {
     await ctx.close();
   });
 
-  test('breadcrumb reads "Bookshop / Stock Movements"', async ({ browser }) => {
+  // Waived by Umair on 2026-11-16 (PR 558 cycle 1, finding H2): the F7 shell removed breadcrumbs app-wide, so the
+  // "Bookshop / Stock Movements" breadcrumb criterion no longer applies. Kept skipped for reference.
+  test.skip('breadcrumb reads "Bookshop / Stock Movements" (waived 2026-11-16)', async ({ browser }) => {
     const ctx = await ownerContext(browser, A);
     const page = await openLog(ctx);
     await expectRowCount(page, 10);
@@ -406,6 +408,7 @@ test.describe('Stock Movements log (86exmwjgc)', () => {
     await retry.click();
     await expectRowCount(page, 10);
     await expectTiles(page, [13, 6, 5, 2]);
+    // Confirmed by Umair on 2026-11-16: the button must read "Retry" as in the story (finding L1, filed as a normal bug).
     expect(label, 'the story names the button "Retry"').toBe('Retry');
     await ctx.close();
   });
