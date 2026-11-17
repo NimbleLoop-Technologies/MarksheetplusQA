@@ -390,7 +390,10 @@ export class PayrollRunPage {
 
   /** How many CSS px the document is wider than the viewport (page-level sideways scroll). */
   async pageOverflowPx(): Promise<number> {
-    return this.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    // Measured against the device viewport, not window.innerWidth: on a mobile device the layout viewport grows to fit
+    // wide content (innerWidth 607 on a 393px Pixel 5), so innerWidth hid page-level sideways scroll until cycle 3.
+    const vw = this.page.viewportSize()!.width;
+    return this.page.evaluate((w) => document.documentElement.scrollWidth - w, vw);
   }
 
   /** True when the element's box lies inside the viewport horizontally at the table's initial scroll position. */
