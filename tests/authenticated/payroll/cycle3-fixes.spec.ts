@@ -218,6 +218,8 @@ test.describe('Cycle 3 — the reopened items', () => {
       cur = await current();
     }
     const runId = cur.runId;
+    // The Worker posts each line to the ledger; until it has, the line reads "Posting pending" (and stays so after Mark as paid).
+    await expect.poll(async () => (await P.register(w.owner.api, runId)).rows.filter((r) => r.postingPending).length, { timeout: 180_000, intervals: [3000] }).toBe(0);
     const page = await P.openApp(browser, w, P.runPath(runId), pixel5);
     const run = new PayrollRunPage(page);
     await run.expectPublishedLoaded();
@@ -250,4 +252,56 @@ test.describe('Cycle 3 — the reopened items', () => {
     await page.screenshot({ path: P.shot('c3-mobile-payslip-pixel5.png') });
     await page.context().close();
   });
+  test('C3-ADD-ONE-OFF-VISIBLE (new): "+ Add a one-off" in the row panel is visible (text contrast at least 3:1 on its background)', async ({ browser }) => {
+    const cur = await current();
+    const runId = cur.state === 'Draft' ? cur.runId : await freshDraft();
+    const page = await P.openApp(browser, w, P.runPath(runId));
+    const run = new PayrollRunPage(page);
+    await run.expectDraftLoaded();
+    await run.openRow(w.data.spares[0].name);
+    const link = run.addOneOffLink();
+    await link.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: P.shot('c3-add-one-off-invisible.png') });
+    const c = await link.evaluate((b) => {
+      const rgb = (v: string) => (v.match(/[\d.]+/g) || []).map(Number);
+      let bgEl: HTMLElement | null = b as HTMLElement; let bg = [255, 255, 255, 0];
+      while (bgEl) { const v = rgb(getComputedStyle(bgEl).backgroundColor); if (v.length >= 3 && (v[3] === undefined || v[3] > 0)) { bg = v; break; } bgEl = bgEl.parentElement; }
+      const fg = rgb(getComputedStyle(b).color);
+      const lum = (x: number[]) => { const [r, g, bl] = x.slice(0, 3).map((u) => { u /= 255; return u <= 0.03928 ? u / 12.92 : ((u + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * bl; };
+      const [l1, l2] = [lum(fg), lum(bg)].sort((a, z) => z - a);
+      return { color: getComputedStyle(b).color, background: `rgb(${bg.slice(0, 3).join(', ')})`, ratio: Math.round(((l1 + 0.05) / (l2 + 0.05)) * 100) / 100 };
+    });
+    await P.saveEvidence('c3-add-one-off-contrast.txt', JSON.stringify(c, null, 2));
+    expect(c.ratio, `"+ Add a one-off" is ${c.color} on ${c.background}`).toBeGreaterThanOrEqual(3);
+    await page.context().close();
+  });
+
+  test('C3-PANEL-AFTER-SEARCH (new): with the register searched, the first "+ Add a one-off" opens the form and a failed save keeps the typed value', async ({ browser }) => {
+    const cur = await current();
+    const runId = cur.state === 'Draft' ? cur.runId : await freshDraft();
+    const s = w.data.spares[1];
+    await P.absence(w.owner.api, runId, (await P.rowFor(w.owner.api, runId, s)).id, 0);
+    const page = await P.openApp(browser, w, P.runPath(runId));
+    const run = new PayrollRunPage(page);
+    await run.expectDraftLoaded();
+    await run.searchFor(s.name);
+    await run.openRow(s.name);
+    await run.addOneOffLink().click();
+    await page.waitForTimeout(1500);
+    const formAfterFirstClick = (await run.panel.getByText('Amount (PKR)').count()) > 0;
+    if (formAfterFirstClick) await run.panel.getByRole('button', { name: 'Cancel' }).click();
+    await page.route('**/rows/*/absence', (route) => route.abort('internetdisconnected'));
+    await run.setUnpaidDays('3');
+    await expect(run.saveFailed).toBeVisible();
+    await page.waitForTimeout(1000);
+    const valueAfterFailedSave = await run.unpaidDays.inputValue();
+    await page.screenshot({ path: P.shot('c3-search-failed-save-value.png'), fullPage: true });
+    await page.unroute('**/rows/*/absence');
+    await expect.poll(async () => (await P.rowFor(w.owner.api, runId, s)).unpaidDays, { timeout: 30_000 }).toBe(3);
+    await P.saveEvidence('c3-panel-after-search.txt', `register searched for ${s.name}\nform open after the first "+ Add a one-off" click: ${formAfterFirstClick}\nUnpaid days input after the failed save: "${valueAfterFailedSave}" (typed 3)\nserver unpaidDays after the retry: 3`);
+    expect.soft(formAfterFirstClick, 'first click opens the one-off form').toBe(true);
+    expect.soft(valueAfterFailedSave, 'the typed value stays in the input while "Not saved" shows').toBe('3');
+    await page.context().close();
+  });
 });
+

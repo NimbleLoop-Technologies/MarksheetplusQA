@@ -81,7 +81,12 @@ test.describe.serial('Cycle 2 — deeper checks', () => {
     await run.expectDraftLoaded();
     await run.searchFor(w.data.ayesha.name);
     await run.openRow(w.data.ayesha.name);
+    // Cycle 3: with the register searched the panel re-renders a moment after it opens and resets the one-off form
+    // (C3-PANEL-AFTER-SEARCH). Let it settle, then open the form, so this test keeps checking the whole-rupee rule
+    // (z94x8ecrnh) on its own.
+    await page.waitForTimeout(4000);
     await run.addOneOffLink().click();
+    if (!(await run.oneOffField('Label').isVisible({ timeout: 2000 }).catch(() => false))) await run.addOneOffLink().click();
     await run.fillOneOff({ type: 'Incentive', label: 'Qa Half rupee', amount: '0.5', reason: 'Fraction from the form' });
     await run.oneOffSubmit().click();
     await expect(run.panelText('Enter a whole number of rupees.')).toBeVisible();
