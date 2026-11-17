@@ -50,7 +50,9 @@ test.describe('Staff Payroll page — month card states', () => {
     await page.context().close();
   });
 
-  test('P-BREADCRUMB: the page shows the breadcrumb "Home > Account Office > Staff Payroll"', async ({ browser }) => {
+  // z94x8ecrnv (N2) waived by Umair on 2026-11-17: breadcrumbs are removed from the new designs (app-shell redesign),
+  // so the "Home > Account Office > Staff Payroll" criterion no longer applies. Kept as a skipped record of the waiver.
+  test.skip('P-BREADCRUMB: the page shows the breadcrumb "Home > Account Office > Staff Payroll"', async ({ browser }) => {
     const page = await P.openApp(browser, w);
     const ui = new StaffPayrollPage(page);
     await ui.expectLoaded();
