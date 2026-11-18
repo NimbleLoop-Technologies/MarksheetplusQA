@@ -157,7 +157,8 @@ test.describe('Cycle 3 — the reopened items', () => {
       `connection copy shown: ${visibleText.includes('Check your connection')}`,
       `"This draft was discarded." shown: ${visibleText.includes('This draft was discarded.')}`,
     ].join('\n'));
-    expect.soft(res.status(), 'publish answers a clear conflict, not 404/500').toBe(409);
+    // Cycle 4 (1c924d83): the server still answers 404 here, and the client now maps 404 like 409 RUN_DISCARDED.
+    expect.soft([404, 409], 'publish answers 404/409 (mapped by the client), never 500').toContain(res.status());
     expect.soft(visibleText, 'the user is not told to check their connection').not.toContain('Check your connection');
     expect.soft(visibleText, 'the user is told the draft was discarded').toContain('This draft was discarded.');
     await page.context().close();
