@@ -23,6 +23,23 @@ Environment facts and lessons that save time in the next cycle.
 - 2026-11-03: Names must be letters only (the name validator rejects digits), so generated names
   use a base-26 suffix (`fixtures/test-data.ts`), not `Date.now()`.
 
+- 2026-11-10 (PR 547 fee challans): on a local stack the Worker `GenerateFeeChallansScheduler` runs every
+  minute and re-runs today's cycle whenever a policy's generation day == today (UTC). A school policy with
+  `challanGenerationDay` = today's day (allowed days 1/5/10/15/30) and `effectiveFrom` = today gets challans
+  in 0.5–2 min. A "next cycle" in the same day: move the issued cycle back with
+  `fixtures/fees.ts shiftIssuedCycleBack()` (dates, labels AND the `yyMM-` challan-number prefix, else the
+  `IX_FeeChallans_TenantId_ChallanNumber` index clashes). Shift a second time by 2 months, not 1.
+- 2026-11-10: `fee-policies/{id}` detail returns `policyName` (lower-cased), not `name`. Root set-up
+  (`/accounts/fee-policies/new`) opens the existing school policy's settings once one exists.
+- 2026-11-10: the shared `Toggle` component is exposed as role **checkbox** (not switch); `RowActionButton`
+  with an Href is an `<a role="button">`. Defaulters "Receive" opens the family page with the family's own
+  Receive drawer already open (when the family has combined dues).
+- 2026-11-10: `Students.Status` (and other enums in SchoolDbContext) are stored Humanized: 'Active', 'Struck off',
+  'Passed'. Writing '1' or 'StruckOff' in a DB setup makes every query that loads students 500 (Humanizer
+  NoMatchFoundException) — e.g. the whole Fee Payment list.
+- 2026-11-10: two Playwright runs at once on one worktree wipe each other's `test-results/` (cached seed
+  files). Give the second run `--output=<other dir>`.
+
 ## Unverified (confirm in the first live cycle)
 
 - Whether the access token kept in sessionStorage is re-issued from the refresh token in

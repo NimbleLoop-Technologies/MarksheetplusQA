@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# QA_MONGOSH shim for the CI stack: runs mongosh inside the stack's mongo container, so the runner needs no
+# mongosh install and Mongo is never published. Fixtures call `$QA_MONGOSH <url> --quiet --eval <script>`;
+# the url is passed through unchanged (use mongodb://localhost:27017/<db>, i.e. as seen from that container).
+set -euo pipefail
+: "${QA_CI_COMPOSE_PROJECT:?QA_CI_COMPOSE_PROJECT is not set (export it from ci/run-regression.sh)}"
+cid="$(docker ps -q -f "label=com.docker.compose.project=$QA_CI_COMPOSE_PROJECT" -f "label=com.docker.compose.service=mongo" | head -n1)"
+[[ -n "$cid" ]] || { echo "mongosh shim: no running mongo container in compose project $QA_CI_COMPOSE_PROJECT" >&2; exit 1; }
+exec docker exec -i "$cid" mongosh "$@"

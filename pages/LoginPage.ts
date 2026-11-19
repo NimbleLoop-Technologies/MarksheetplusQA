@@ -5,7 +5,9 @@ export class LoginPage {
   constructor(private readonly page: Page) {}
 
   async expectLoaded() {
-    await expect(this.page.getByRole('heading', { name: 'Sign in to your account' })).toBeVisible();
+    // A fresh context boots the WASM app and follows the OIDC redirect to the AuthApp first; on a loaded
+    // runner that takes longer than the 5 s default (seen in CI: the page arrived just after the timeout).
+    await expect(this.page.getByRole('heading', { name: 'Sign in to your account' })).toBeVisible({ timeout: 30_000 });
   }
 
   /** "Not a member? Start your free trial today" → /auth/register (keeps the returnUrl). */

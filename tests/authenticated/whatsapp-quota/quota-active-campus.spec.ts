@@ -45,7 +45,7 @@ test.afterAll(async () => {
   await owner?.api.dispose();
 });
 
-test('AC4 + AC6: an active campus on a plan without a quota row gets the default 100 messages / month', async () => {
+test('AC4 + AC6: an active campus on a plan without a quota row gets the default 100 messages / month', { tag: '@smoke' }, async () => {
   await ops.activate(subscriptionId);
   // Polled: QuotaManager caches the trial entitlement for up to 60 s (see quota-activation-cache.spec.ts).
   await expect.poll(async () => (await summary()).included, { timeout: 90_000, intervals: [5_000] }).toBe(100);
@@ -55,7 +55,7 @@ test('AC4 + AC6: an active campus on a plan without a quota row gets the default
   expect(new Date(quota.resetsAtUtc).toISOString()).toBe(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString());
 });
 
-test('AC3 + AC7: a top-up request snapshots the package and only one can be pending', async () => {
+test('AC3 + AC7: a top-up request snapshots the package and only one can be pending', { tag: '@smoke' }, async () => {
   const first = await requestTopUp(pkg.id);
   expect(first.status()).toBe(201);
   expect(await first.json()).toMatchObject({ quantity: 100, price: 100, status: 'Requested' });
@@ -68,7 +68,7 @@ test('AC3 + AC7: a top-up request snapshots the package and only one can be pend
   expect(await pendingRequestId()).toBeTruthy();
 });
 
-test('AC3: approving grants an add-on once; approving twice is 409 and grants nothing more', async () => {
+test('AC3: approving grants an add-on once; approving twice is 409 and grants nothing more', { tag: '@smoke' }, async () => {
   const id = (await pendingRequestId())!;
   const ok = await ops.approve(id);
   expect(ok.status(), await ok.text()).toBe(200);

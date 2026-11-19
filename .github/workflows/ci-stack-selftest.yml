@@ -1,0 +1,76 @@
+# Brings up only the throwaway infra (no MarksheetPlus checkout, no secrets) and waits until
+# postgres, mongo, rabbitmq, minio and smtp4dev are healthy. Catches runner-image breaks such as
+# mongo:8 exiting on the GitHub-hosted kernel before a full regression run spends time publishing.
+name: CI stack self-test
+
+on:
+  pull_request:
+    paths:
+      - "ci/**"
+      - ".github/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  infra:
+    name: Infra services become healthy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      COMPOSE_PROJECT_NAME: qaci-selftest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: "Start infra: postgres, mongo, rabbitmq, minio, smtp4dev"
+        run: |
+          set -euo pipefail
+          set -a
+          # shellcheck disable=SC1091
+          source ci/stack/stack.env
+          set +a
+          export QA_CI_WORK_DIR="${RUNNER_TEMP}/qa-ci-work"
+          mkdir -p "$QA_CI_WORK_DIR/env"
+          for f in common api authapp worker; do
+            : > "$QA_CI_WORK_DIR/env/$f.env"
+          done
+          docker compose \
+            -p "$COMPOSE_PROJECT_NAME" \
+            -f ci/stack/docker-compose.yml \
+            --project-directory ci/stack \
+            up -d --wait --wait-timeout 180 \
+            postgres mongo rabbitmq minio smtp4dev
+          docker compose \
+            -p "$COMPOSE_PROJECT_NAME" \
+            -f ci/stack/docker-compose.yml \
+            --project-directory ci/stack \
+            ps -a
+
+      - name: "Dump logs: unhealthy infra"
+        if: failure()
+        run: |
+          set +e
+          docker compose \
+            -p "$COMPOSE_PROJECT_NAME" \
+            -f ci/stack/docker-compose.yml \
+            --project-directory ci/stack \
+            ps -a
+          for s in postgres mongo rabbitmq minio smtp4dev; do
+            echo "===== ${s} ====="
+            docker compose \
+              -p "$COMPOSE_PROJECT_NAME" \
+              -f ci/stack/docker-compose.yml \
+              --project-directory ci/stack \
+              logs --no-color --tail 80 "$s"
+          done
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose \
+            -p "$COMPOSE_PROJECT_NAME" \
+            -f ci/stack/docker-compose.yml \
+            --project-directory ci/stack \
+            down -v --remove-orphans --timeout 20

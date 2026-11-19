@@ -53,7 +53,7 @@ const replacePreference = async (doc: Record<string, unknown> | null) => {
 const paidNote = (p: Page) => p.locator('[data-whatsapp-notifications] [data-notifications-paid-note]');
 const kindRow = (p: Page, kind: number) => p.locator(`[data-whatsapp-notifications] [data-notification-kind="${kind}"]`);
 
-test('AC3: GET preferences lists "Fee receipt" (kind 6) with its description, OFF on a brand-new campus', async () => {
+test('AC3: GET preferences lists "Fee receipt" (kind 6) with its description, OFF on a brand-new campus @smoke', async () => {
   expect(await quotaDb.notificationPreference(owner.tenantId), 'no preference document yet').toBeNull();
   const list = await items();
   expect(list.map((i) => i.kind)).toEqual([WA_KIND.ResultPublished, WA_KIND.FeePaymentReceipt, WA_KIND.PendingDues]);
@@ -63,7 +63,7 @@ test('AC3: GET preferences lists "Fee receipt" (kind 6) with its description, OF
   expect(list.every((i) => !i.enabled)).toBe(true);
 });
 
-test('AC3: Campus Settings shows the "Fee receipt" toggle OFF with the paid-credits note inline, no dialog', async () => {
+test('AC3: Campus Settings shows the "Fee receipt" toggle OFF with the paid-credits note inline, no dialog @smoke', async () => {
   const settings = new CampusNotificationSettings(page);
   await settings.open();
   await expect(settings.toggle(FEE_RECEIPT)).toBeVisible();
@@ -102,7 +102,7 @@ test('AC3: legacy pre-opt-in documents ({DisabledKinds: []} / {DisabledKinds: [1
   }
 });
 
-test('R2: a client that does not know Fee receipt (PUT disabledKinds=[1], the pre-PR page body) must not switch Fee receipt ON', async () => {
+test('R2: a client that does not know Fee receipt (PUT disabledKinds=[1], the pre-PR page body) must not switch Fee receipt ON @smoke', async () => {
   test.fail(true, 'R2 open: UpdateNotificationPreferences stores the complement of DisabledKinds');
   // State before: an existing campus with Result + Dues ON and Fee receipt OFF.
   await replacePreference({ EnabledKinds: [WA_KIND.ResultPublished, WA_KIND.PendingDues] });

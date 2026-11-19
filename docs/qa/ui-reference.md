@@ -197,3 +197,23 @@ Recorded 2026-11-03, PR 550 head 69080e19.
 - Customer detail: "WhatsApp quota" card. Malformed or unknown ids on /backoffice/api/* → 404.
 - Missing AuthApp / back-office pages (browser GET): 404 with the plain "Not Found — Sorry, the content you are looking for does not exist." page;
   API / JSON / POST requests keep their own status with an empty body.
+
+## Account Office — fee policies & fee payment (PR 547, observed 2026-11-10 on PR head 9e957279)
+
+Page objects: `pages/fees/AccountOffice.ts`.
+- /accounts/fee-policies/new: h1 "Set up school policy" (or "School policy settings" when a school policy exists / `?policyId=` root;
+  "Add class policy" `?type=class`; "Edit class policy"; "Duplicate class policy" `?duplicateFromPolicyId=…&type=class`). Root sections (h2):
+  "Fee cycle and tuition", "Late fine", **"Challan name"** ("Choose whose name the generated challans are issued under."), "Bank details",
+  "Additional funds". Switch = `checkbox "Generate challans under student name"` (id `fee-policy-challans-per-student`), description
+  "Off: one combined challan under the family name. On: a separate challan for each student. Applies from the next fee cycle; issued challans keep their grouping."
+  Root set-up has no policy-name field: combobox "Challan generation day" (options "1st day", "5th day", "10th day", …), spinbuttons "Due day",
+  "Base tuition"; button "Publish policy" (set-up) / "Save changes" (edit). No Challan name section on class add/edit/duplicate.
+- /accounts/fee-payment: h1 "Fee Payment"; tiles "Families with dues", "Outstanding", "Overdue", "Collected today"; first column header
+  "Student" when the active school policy bills per student (no "Students" column), else "Family". Row action `button "Receive from <row name>"`.
+  Student rows add "Admission ID: <id>".
+- /accounts/fee-payment/families/{id}[?challanId=]: h1 = family, or the student on `?challanId=`; tiles `[data-tile=outstanding|challans]`;
+  card `[data-student-challans]` "Billed per student" with `a[role=button]` "Receive <Student>" / "Open <Student>"; Receive bar label
+  "Family challans" beside student challans. Drawer `dialog "Receive payment"`, field "Amount", buttons "Cancel" / "Confirm payment";
+  after paying: dialog "Payment received" ("Rs N collected from <Family> in cash", "Balance remaining").
+- /accounts/dashboard/defaulters: h1 "Defaulters"; row action `a[role=button]` "Receive from <Family>" → family /receive (drawer auto-opens
+  when the family has combined dues). Ledger h1 "<Family> ledger", button "Receive payment", back link "<Family>".

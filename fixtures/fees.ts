@@ -1,28 +1,35 @@
 /**
- * PR 555 (ClickUp z94x8e9yhj) "WhatsApp fee receipts" helpers for the LOCAL branch-testing stack.
- * Adapted from the PR 547 fees helpers (qa/pr-547 fixtures/fees.ts): API seeding through the owner's
- * RestApi bearer, Postgres reads/writes through psql, Mongo reads through fixtures/quota.ts `mongo`.
+ * Fee helpers used by challan-name (PR 547, main) and WhatsApp fee receipts (PR 555, qa/pr-555).
+ * Local stack only: API seeding through the owner's RestApi bearer, Postgres via psql, Mongo via fixtures/quota.ts.
  *
- *  - setupSchool():      session + N classes (one section each) on a throwaway campus
+ *  - setupSchool():      session + N classes (one section each) on a fresh throwaway campus
  *  - addStudent():       quick-add; same father mobile => same Family (siblings)
- *  - createSchoolPolicy(): school fee policy whose ChallanGenerationDay is today's UTC day, so the Worker
- *                        scheduler (1-minute interval) issues the current cycle within a minute or two
- *  - waitForChallans():  polls FeeChallans until the scheduler issued them
- *  - pay():              POST fee-payments/families/{id}/payments
- *  - receiptOutbox()/receiptRows(): the FeePaymentReceivedEvent outbox rows and the queued WhatsApp rows
+ *  - createSchoolPolicy / createClassPolicy / updatePolicy: fee policy API
+ *  - waitForChallans():  polls FeeChallans until the Worker scheduler (1-minute interval) issued them
+ *  - shiftIssuedCycleBack(): DB SETUP — moves the tenant's issued challans one month back so the
+ *                        scheduler issues the current cycle again (a second cycle without waiting a month)
+ *  - pay():              POST /fee-payments/families/{id}/payments
  *
  * Every SQL statement that WRITES is marked "DB SETUP" and is logged to the test output.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomInt, randomUUID } from 'node:crypto';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { expect, type APIRequestContext, type APIResponse } from '@playwright/test';
-import { mongo, WA_KIND, type CampusOwner } from './quota';
+import { cacheOwner, ownerFromCache, type CachedOwner, type CampusOwner } from './campus-owner';
+import { mongo, WA_KIND } from './quota';
 
 const run = promisify(execFile);
 
-export const SCHOOLS_DB = process.env.QA_SCHOOLS_DB ?? 'mp-shared-schools-db';
-const PG_HOST = process.env.QA_PG_HOST ?? '127.0.0.1';
+// CI exports QA_PG_* (role qaci). Unset, these are the qa555 netns defaults (user postgres, no password override).
+export const SCHOOLS_DB = process.env.QA_PG_SCHOOL_DB ?? process.env.QA_SCHOOLS_DB ?? 'mp-shared-schools-db';
+const PG = {
+  host: process.env.QA_PG_HOST ?? '127.0.0.1',
+  port: process.env.QA_PG_PORT ?? '5432',
+  user: process.env.QA_PG_USER ?? 'postgres',
+};
 
 /** Today's UTC date (the scheduler's run date), yyyy-mm-dd. */
 export const todayUtc = () => new Date().toISOString().slice(0, 10);
@@ -31,9 +38,13 @@ export const todayUtc = () => new Date().toISOString().slice(0, 10);
 
 /** Runs SQL against the schools DB; returns rows as arrays of strings (unaligned, tab separated). */
 export async function sql(statement: string, db = SCHOOLS_DB): Promise<string[][]> {
-  const { stdout } = await run('psql', ['-h', PG_HOST, '-U', 'postgres', '-d', db, '-At', '-F', '\t', '-v', 'ON_ERROR_STOP=1', '-c', statement], {
+  // Leave PGPASSWORD alone when QA_PG_PASSWORD is unset, so a local trust/peer/pgpass login still works.
+  const env = { ...process.env };
+  if (process.env.QA_PG_PASSWORD !== undefined) env.PGPASSWORD = process.env.QA_PG_PASSWORD;
+  const { stdout } = await run('psql', ['-h', PG.host, '-p', PG.port, '-U', PG.user, '-d', db, '-At', '-F', '\t', '-v', 'ON_ERROR_STOP=1', '-c', statement], {
+    env,
     timeout: 60_000,
-    maxBuffer: 32 * 1024 * 1024,
+    maxBuffer: 8 * 1024 * 1024,
   });
   return stdout.split('\n').filter((l) => l.length > 0).map((l) => l.split('\t'));
 }
@@ -44,7 +55,7 @@ export async function dbSetup(reason: string, statement: string): Promise<string
   return sql(statement);
 }
 
-export const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
+const q = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
 // ── API helpers ──────────────────────────────────────────────────────────────────────────────
 
@@ -60,7 +71,7 @@ const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 /** Letters-only person name (QuickAdd rejects digits). */
 export const personName = (prefix: string) => `${prefix} ${titleCase(letters(6))}`;
 /** Unique 03xx mobile for a family (father mobile groups siblings). */
-export const familyMobile = () => `0335${String(randomInt(0, 10_000_000)).padStart(7, '0')}`;
+export const familyMobile = () => `0331${String(randomInt(0, 10_000_000)).padStart(7, '0')}`;
 
 export interface SchoolSetup {
   sessionId: string;
@@ -120,64 +131,376 @@ export async function addStudent(owner: CampusOwner, opts: { name: string; class
   return { id: body.id, name: opts.name, admissionId: body.admissionId ?? admissionId, classId: opts.classId, familyId: fam[0][0] };
 }
 
-// ── Fee policy ───────────────────────────────────────────────────────────────────────────────
+// ── Fee policies ─────────────────────────────────────────────────────────────────────────────
 
+export const SCOPE = { SchoolWide: 0, ClassSpecific: 1 } as const;
+export const POLICY_TYPE = { Root: 0, Class: 1 } as const;
 const ALLOWED_DAYS = [1, 5, 10, 15, 30];
 
-/** The generation day that makes the scheduler issue a cycle today (today's UTC day must be an allowed day). */
-export function todaysGenerationDay(): number {
-  const day = new Date().getUTCDate();
-  if (!ALLOWED_DAYS.includes(day)) {
-    throw new Error(`today's UTC day ${day} is not an allowed challan generation day (${ALLOWED_DAYS}); these specs need DB setup to bill today`);
-  }
-  return day;
+export interface PolicyOptions {
+  name?: string;
+  tuition?: number;
+  perStudent?: boolean | undefined;
+  dueDay?: number;
+  publish?: boolean;
+  bank?: boolean;
 }
 
-export async function createSchoolPolicy(owner: CampusOwner, tuition = 1500): Promise<string> {
-  const body = await ok(
-    await owner.api.post('fee-policies', {
-      data: {
-        policyName: `QA555 School ${letters(5)}`, publishNow: true, description: null, policyType: 0, rootPolicyId: null, scope: 0, classIds: [],
-        occurrence: 0, challanGenerationDay: todaysGenerationDay(), dueDay: 25, tuitionFee: tuition, enableFineRule: false, fineType: null,
-        fineAmount: null, graceDays: null, effectiveFrom: `${todayUtc()}T00:00:00Z`, effectiveUntil: null, additionalFundIds: [],
-        bankName: 'QA Bank', accountTitle: 'QA School Account', accountNumber: null, bankBranch: 'Main',
-      },
-    }),
-    'fee-policies (school)',
-  );
-  return body.id as string;
+/** Whether today's UTC day is itself an allowed challan generation day (the scheduler then bills a new policy today on its own). */
+export const isGenerationDayToday = () => ALLOWED_DAYS.includes(new Date().getUTCDate());
+
+/**
+ * The generation day the specs bill on: today when today is an allowed day, otherwise the latest allowed day
+ * earlier this month (11 Nov -> 10). On such an off-day the scheduler only issues that cycle after
+ * armTodaysRun (DB SETUP) makes it a missed run, which waitForChallans does by itself.
+ */
+export function todaysGenerationDay(): number {
+  const day = new Date().getUTCDate();
+  return [...ALLOWED_DAYS].reverse().find((allowed) => allowed <= day)!;
+}
+
+/**
+ * DB SETUP, off-days only (a no-op when today is a generation day): makes this month's generation day a run the
+ * scheduler missed, so its next pass issues that cycle today: every policy version of the tenant starts on the
+ * 1st of the month (first generation date = this month's generation day), and the tenant's run row says the last
+ * run was the day before it (CalculatePendingChallanCycles then catches the cycle up).
+ */
+export async function armTodaysRun(tenantId: string): Promise<void> {
+  if (isGenerationDayToday()) return;
+  const now = new Date();
+  const monthStart = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-01`;
+  const lastRun = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), todaysGenerationDay() - 1)).toISOString().slice(0, 10);
+  await dbSetup(`off-day ${todayUtc()}: arm the scheduler for tenant ${tenantId} (generation day ${todaysGenerationDay()} as a missed run)`, `
+    update "FeePolicies" set "EffectiveFrom" = ${q(monthStart)}::timestamptz
+    where "TenantId" = ${q(tenantId)} and "EffectiveFrom" > ${q(monthStart)}::timestamptz;
+    insert into "FeeChallanGenerationRuns" ("Id", "TenantId", "NextRunAt", "LastRunAt", "IsCompleted", "CreatedDate", "CreatedBy")
+    values (gen_random_uuid(), ${q(tenantId)}, now(), ${q(lastRun)}::timestamptz, true, now(), 'qa-setup')
+    on conflict ("TenantId") do update set "LastRunAt" = excluded."LastRunAt", "NextRunAt" = now();`);
+}
+
+export async function createSchoolPolicy(owner: CampusOwner, o: PolicyOptions = {}): Promise<{ id: string; status: number; body: any }> {
+  const data: Record<string, unknown> = {
+    policyName: o.name ?? `QA School ${letters(5)}`,
+    publishNow: o.publish ?? true,
+    description: null,
+    policyType: POLICY_TYPE.Root,
+    rootPolicyId: null,
+    scope: SCOPE.SchoolWide,
+    classIds: [],
+    occurrence: 0,
+    challanGenerationDay: todaysGenerationDay(),
+    dueDay: o.dueDay ?? 25,
+    tuitionFee: o.tuition ?? 1000,
+    enableFineRule: false,
+    fineType: null,
+    fineAmount: null,
+    graceDays: null,
+    effectiveFrom: `${todayUtc()}T00:00:00Z`,
+    effectiveUntil: null,
+    additionalFundIds: [],
+    bankName: o.bank === false ? null : 'QA Bank',
+    accountTitle: o.bank === false ? null : 'QA School Account',
+    accountNumber: null,
+    bankBranch: o.bank === false ? null : 'Main',
+  };
+  if (o.perStudent !== undefined) data.generateChallansPerStudent = o.perStudent;
+  const res = await owner.api.post('fee-policies', { data });
+  const text = await res.text();
+  return { id: res.ok() ? JSON.parse(text).id : '', status: res.status(), body: text ? safeJson(text) : null };
+}
+
+export async function createClassPolicy(
+  owner: CampusOwner,
+  rootPolicyId: string,
+  classIds: string[],
+  o: PolicyOptions = {},
+): Promise<{ id: string; status: number; body: any }> {
+  const data: Record<string, unknown> = {
+    policyName: o.name ?? `QA Class ${letters(5)}`,
+    publishNow: o.publish ?? true,
+    description: null,
+    policyType: POLICY_TYPE.Class,
+    rootPolicyId,
+    scope: SCOPE.ClassSpecific,
+    classIds,
+    occurrence: 0,
+    challanGenerationDay: todaysGenerationDay(),
+    dueDay: o.dueDay ?? 25,
+    tuitionFee: o.tuition ?? 2000,
+    enableFineRule: false,
+    fineType: null,
+    fineAmount: null,
+    graceDays: null,
+    effectiveFrom: `${todayUtc()}T00:00:00Z`,
+    effectiveUntil: null,
+    additionalFundIds: [],
+  };
+  if (o.perStudent !== undefined) data.generateChallansPerStudent = o.perStudent;
+  const res = await owner.api.post('fee-policies', { data });
+  const text = await res.text();
+  return { id: res.ok() ? JSON.parse(text).id : '', status: res.status(), body: text ? safeJson(text) : null };
+}
+
+export async function policyDetail(owner: CampusOwner, policyId: string): Promise<any> {
+  return ok(await owner.api.get(`fee-policies/${policyId}`), `GET fee-policies/${policyId}`);
+}
+
+/**
+ * PUT /fee-policies/{id} from the current detail with `changes` applied. Returns the raw response;
+ * the new version's id is in the body (`id`).
+ */
+export async function updatePolicy(owner: CampusOwner, policyId: string, changes: Record<string, unknown>): Promise<APIResponse> {
+  const d = await policyDetail(owner, policyId);
+  const isRoot = String(d.policyType) === 'Root' || d.policyType === 0;
+  const data: Record<string, unknown> = {
+    policyName: d.policyName,
+    status: d.status ?? 'Active',
+    description: d.description ?? null,
+    policyType: isRoot ? POLICY_TYPE.Root : POLICY_TYPE.Class,
+    rootPolicyId: d.rootPolicyId ?? null,
+    scope: isRoot ? SCOPE.SchoolWide : SCOPE.ClassSpecific,
+    classIds: (d.appliedClasses ?? d.classes ?? []).map((c: any) => c.classId ?? c.id),
+    occurrence: 0,
+    challanGenerationDay: d.challanGenerationDay,
+    dueDay: d.dueDay,
+    tuitionFee: d.tuitionFee ?? d.resolvedTuitionFee,
+    enableFineRule: d.enableFineRule ?? false,
+    fineType: null,
+    fineAmount: null,
+    graceDays: null,
+    effectiveFrom: d.effectiveFrom,
+    effectiveUntil: d.effectiveUntil ?? null,
+    additionalFundIds: d.additionalFundIds ?? [],
+    bankName: d.bankName ?? null,
+    accountTitle: d.accountTitle ?? null,
+    accountNumber: d.accountNumber ?? null,
+    bankBranch: d.bankBranch ?? null,
+    ...changes,
+  };
+  return owner.api.put(`fee-policies/${policyId}`, { data });
+}
+
+/** Latest version id of a policy's version group (updates create a new version). */
+export async function latestPolicyVersion(policyId: string): Promise<{ id: string; perStudent: boolean; version: number }> {
+  const rows = await sql(`
+    select p."Id", p."GenerateChallansPerStudent", p."VersionNumber" from "FeePolicies" p
+    where p."VersionGroupId" = (select "VersionGroupId" from "FeePolicies" where "Id" = ${q(policyId)})
+    order by p."VersionNumber" desc limit 1`);
+  return { id: rows[0][0], perStudent: rows[0][1] === 't', version: Number(rows[0][2]) };
 }
 
 // ── Challans ─────────────────────────────────────────────────────────────────────────────────
 
-export interface ChallanRow { id: string; familyId: string; number: string; cycleLabel: string; total: number; outstanding: number }
-
-export async function challans(tenantId: string): Promise<ChallanRow[]> {
-  const rows = await sql(`
-    select c."Id", c."FamilyId", c."ChallanNumber", c."CycleLabel", c."TotalAmount", c."OutstandingAmount"
-    from "FeeChallans" c where c."TenantId" = ${q(tenantId)} order by c."ChallanNumber"`);
-  return rows.map((r) => ({ id: r[0], familyId: r[1], number: r[2], cycleLabel: r[3], total: Number(r[4]), outstanding: Number(r[5]) }));
+export interface ChallanRow {
+  id: string;
+  familyId: string;
+  primaryStudentId: string | null;
+  perStudent: boolean;
+  number: string;
+  cycleStart: string;
+  cycleLabel: string;
+  dueDate: string;
+  total: number;
+  outstanding: number;
+  status: string;
+  /** Σ line.RemainingAmount */
+  remaining: number;
+  /** Distinct StudentIds on the lines. */
+  lineStudents: string[];
 }
 
-/** Polls until every family in `familyIds` has a challan (the scheduler ticks every minute). */
-export async function waitForChallans(tenantId: string, familyIds: string[], timeout = 300_000): Promise<ChallanRow[]> {
+export async function challans(tenantId: string, where = 'true'): Promise<ChallanRow[]> {
+  const rows = await sql(`
+    select c."Id", c."FamilyId", coalesce(c."PrimaryStudentId"::text, ''), c."GenerateChallansPerStudent", c."ChallanNumber",
+           to_char(c."CycleStartDate" at time zone 'UTC', 'YYYY-MM-DD'), c."CycleLabel", to_char(c."DueDate" at time zone 'UTC', 'YYYY-MM-DD'),
+           c."TotalAmount", c."OutstandingAmount", c."Status",
+           coalesce((select sum(l."RemainingAmount") from "FeeChallanLines" l where l."FeeChallanId" = c."Id"), 0),
+           coalesce((select string_agg(distinct l."StudentId"::text, ',') from "FeeChallanLines" l where l."FeeChallanId" = c."Id"), '')
+    from "FeeChallans" c where c."TenantId" = ${q(tenantId)} and (${where})
+    order by c."CycleStartDate", c."ChallanNumber"`);
+  return rows.map((r) => ({
+    id: r[0], familyId: r[1], primaryStudentId: r[2] || null, perStudent: r[3] === 't', number: r[4], cycleStart: r[5], cycleLabel: r[6],
+    dueDate: r[7], total: Number(r[8]), outstanding: Number(r[9]), status: r[10], remaining: Number(r[11]), lineStudents: r[12] ? r[12].split(',') : [],
+  }));
+}
+
+/** Polls until the tenant has at least `count` challans matching `where` (the scheduler ticks every minute). */
+export async function waitForChallans(tenantId: string, count: number, where = 'true', timeout = 240_000): Promise<ChallanRow[]> {
   let found: ChallanRow[] = [];
+  if ((await challans(tenantId, where)).length < count) await armTodaysRun(tenantId);
   await expect
-    .poll(async () => {
-      found = await challans(tenantId);
-      return familyIds.filter((f) => !found.some((c) => c.familyId === f)).length;
-    }, { message: `scheduler never issued challans for ${familyIds.join(',')} (tenant ${tenantId})`, timeout, intervals: [5_000, 10_000] })
-    .toBe(0);
+    .poll(async () => (found = await challans(tenantId, where)).length, {
+      message: `scheduler never issued ${count} challan(s) (${where}) for tenant ${tenantId}`,
+      timeout,
+      intervals: [5_000, 10_000],
+    })
+    .toBeGreaterThanOrEqual(count);
   return found;
 }
+
+/** Waits for one more full scheduler pass over the tenant (its run row's ModifiedDate moves on). */
+export async function waitForSchedulerPass(tenantId: string, timeout = 180_000): Promise<void> {
+  // On a generation day the tenant stays a scheduler candidate all day; on an off-day only an armed run makes it one again.
+  await armTodaysRun(tenantId);
+  const before = (await sql(`select coalesce("ModifiedDate", "CreatedDate") from "FeeChallanGenerationRuns" where "TenantId" = ${q(tenantId)}`))[0]?.[0] ?? '';
+  await expect
+    .poll(async () => (await sql(`select coalesce("ModifiedDate", "CreatedDate") from "FeeChallanGenerationRuns" where "TenantId" = ${q(tenantId)}`))[0]?.[0] ?? '', {
+      message: `no scheduler pass over tenant ${tenantId}`,
+      timeout,
+      intervals: [5_000],
+    })
+    .not.toBe(before);
+}
+
+/**
+ * DB SETUP: moves every challan of the tenant issued for `fromCycle` (yyyy-mm-01) one month back
+ * (cycle start, issue, due dates, label and the yyMM challan-number prefix), so the scheduler issues
+ * `fromCycle` again on its next pass: the stand-in for "the next cycle" in a single day.
+ */
+export async function shiftIssuedCycleBack(tenantId: string, fromCycle: string, months = 1): Promise<string> {
+  const from = new Date(`${fromCycle}T00:00:00Z`);
+  const to = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth() - months, 1));
+  const yymm = (d: Date) => `${String(d.getUTCFullYear()).slice(2)}${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  const label = (d: Date) => d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' }) + ' ' + d.getUTCFullYear();
+  const statement = `
+    update "FeeChallanLines" set "Label" = replace("Label", ${q(label(from))}, ${q(label(to))})
+    where "FeeChallanId" in (select "Id" from "FeeChallans" where "TenantId" = ${q(tenantId)} and "CycleStartDate" = ${q(fromCycle)}::timestamptz);
+    update "FeeChallans" set
+      "CycleStartDate" = "CycleStartDate" - interval '${months} month',
+      "IssueDate" = "IssueDate" - interval '${months} month',
+      "DueDate" = "DueDate" - interval '${months} month',
+      "CycleLabel" = replace("CycleLabel", ${q(label(from))}, ${q(label(to))}),
+      "ChallanNumber" = regexp_replace("ChallanNumber", '^${yymm(from)}-', '${yymm(to)}-')
+    where "TenantId" = ${q(tenantId)} and "CycleStartDate" = ${q(fromCycle)}::timestamptz`;
+  await dbSetup(`shift the ${fromCycle} cycle of tenant ${tenantId} ${months} month(s) back`, statement);
+  return statement;
+}
+
+// ── Fee payment API ──────────────────────────────────────────────────────────────────────────
+
+export interface PendingPage {
+  generateChallansPerStudent: boolean;
+  items: any[];
+  totalCount: number;
+  summary: any;
+}
+
+export async function pending(api: APIRequestContext, query = 'page=1&pageSize=100'): Promise<PendingPage> {
+  const body = await ok(await api.get(`fee-payments/pending-challans?${query}`), 'pending-challans');
+  return body as PendingPage;
+}
+
+export async function outstanding(api: APIRequestContext, familyId: string, challanId?: string): Promise<APIResponse> {
+  return api.get(`fee-payments/families/${encodeURIComponent(familyId)}/outstanding${challanId === undefined ? '' : `?challanId=${encodeURIComponent(challanId)}`}`);
+}
+
+export async function prints(api: APIRequestContext, familyId: string, challanId?: string): Promise<APIResponse> {
+  return api.get(`fee-payments/families/${encodeURIComponent(familyId)}/challan-prints${challanId === undefined ? '' : `?challanId=${encodeURIComponent(challanId)}`}`);
+}
+
+export async function pay(
+  api: APIRequestContext,
+  familyId: string,
+  amount: number,
+  o: { challanId?: string; clientPaymentId?: string; isOfflinePayment?: boolean; note?: string; waivers?: { challanLineId: string; reason: string }[] } = {},
+): Promise<APIResponse> {
+  const data: Record<string, unknown> = {
+    clientPaymentId: o.clientPaymentId ?? randomUUID(),
+    paymentDate: new Date().toISOString(),
+    amountReceived: amount,
+    note: o.note ?? 'QA Auto challan-name',
+    isOfflinePayment: o.isOfflinePayment ?? false,
+    fineWaivers: o.waivers ?? [],
+  };
+  if (o.challanId !== undefined) data.challanId = o.challanId;
+  return api.post(`fee-payments/families/${encodeURIComponent(familyId)}/payments`, { data });
+}
+
+/** Σ RemainingAmount per challan id (fresh DB read). */
+export async function remainingByChallan(tenantId: string): Promise<Record<string, number>> {
+  const rows = await sql(`
+    select c."Id", coalesce(sum(l."RemainingAmount"), 0) from "FeeChallans" c left join "FeeChallanLines" l on l."FeeChallanId" = c."Id"
+    where c."TenantId" = ${q(tenantId)} group by c."Id"`);
+  return Object.fromEntries(rows.map((r) => [r[0], Number(r[1])]));
+}
+
+// ── Bookshop (fee-account purchases: README "BookshopRouting") ──────────────────────────────
+
+export const FEE_ACCOUNT_TENDER = 'Charge to fee account';
+
+/** One single (no-variant) item with stock, and today's point-of-sale day opened. Returns the item id. */
+export async function setupBookshop(owner: CampusOwner, price = 300): Promise<string> {
+  const item = await ok(
+    await owner.api.post('bookshop/inventory', {
+      data: {
+        itemName: `QA Auto Notebook ${letters(4)}`, sku: `QA-${letters(8).toUpperCase()}`, category: 'Stationery', description: null,
+        openingStock: 500, reorderLevel: 0, costPrice: 100, retailPrice: price, hasVariants: false, options: [], variants: [],
+      },
+    }),
+    'bookshop item',
+  );
+  const day = await owner.api.post('bookshop/point-of-sale/day', { data: { openingFloat: 0 } });
+  // 409/400 when already open is fine.
+  expect(day.status(), `open POS day: ${await day.text()}`).toBeLessThan(500);
+  return (item.item ?? item).id;
+}
+
+/** A fee-account (credit) bookshop sale for one student: lands as an unbilled purchase on the family. */
+export async function feeAccountSale(owner: CampusOwner, studentId: string, itemId: string, quantity = 1): Promise<any> {
+  return ok(
+    await owner.api.post('bookshop/point-of-sale/sales', {
+      data: {
+        clientSaleId: randomUUID(), movementDate: new Date().toISOString(), reference: null, lowStockReason: null, studentId,
+        tenderType: FEE_ACCOUNT_TENDER, amountReceived: null, lines: [{ type: 'Item', itemId, variantId: null, kitId: null, quantity }],
+      },
+    }),
+    `fee-account sale for ${studentId}`,
+  );
+}
+
+// ── Per-file seeded state that survives a worker restart ─────────────────────────────────────
+
+/**
+ * Runs `seed` once per test run and caches its JSON result (with the owner) in the project's output
+ * dir (wiped at the start of each run, gitignored, mode 0600: it holds the throwaway owner's password).
+ * A failed test restarts the worker; the next test reuses the same campus instead of seeding a new one
+ * (each seed costs AuthApp OTP calls and a scheduler wait).
+ */
+export async function seededOnce<T>(
+  outputDir: string,
+  name: string,
+  seed: () => Promise<{ owner: CampusOwner; data: T }>,
+): Promise<{ owner: CampusOwner; data: T }> {
+  const file = path.join(outputDir, `.${name}.json`);
+  try {
+    const cached = JSON.parse(await readFile(file, 'utf8')) as { owner: CachedOwner; data: T };
+    return { owner: await ownerFromCache(cached.owner), data: cached.data };
+  } catch {
+    const result = await seed();
+    await mkdir(outputDir, { recursive: true });
+    await writeFile(file, JSON.stringify({ owner: cacheOwner(result.owner), data: result.data }), { mode: 0o600 });
+    return result;
+  }
+}
+
+function safeJson(text: string): any {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+export { q, q as sqlQuote };
+
+
+// ── PR 555 WhatsApp fee-receipt helpers ──────────────────────────────────────────────────────
 
 /** Σ RemainingAmount over the family's challan lines (fresh DB read) = what the family still owes. */
 export async function familyOutstanding(familyId: string): Promise<number> {
   const rows = await sql(`select coalesce(sum(l."RemainingAmount"), 0) from "FeeChallanLines" l join "FeeChallans" c on c."Id" = l."FeeChallanId" where c."FamilyId" = ${q(familyId)}`);
   return Number(rows[0][0]);
 }
-
-// ── Fee payment API ──────────────────────────────────────────────────────────────────────────
 
 export interface PayOptions { clientPaymentId?: string; isOfflinePayment?: boolean; note?: string; waivers?: { challanLineId: string; reason: string }[] }
 
@@ -192,23 +515,17 @@ export function payBody(amount: number, o: PayOptions = {}) {
   };
 }
 
-export async function pay(api: APIRequestContext, familyId: string, amount: number, o: PayOptions = {}): Promise<APIResponse> {
-  return api.post(`fee-payments/families/${encodeURIComponent(familyId)}/payments`, { data: payBody(amount, o) });
-}
-
 export async function getReceipt(api: APIRequestContext, paymentId: string): Promise<any> {
   return ok(await api.get(`fee-payments/payments/${encodeURIComponent(paymentId)}/receipt`), `GET receipt ${paymentId}`);
 }
 
-// ── Receipt outbox (Postgres) ────────────────────────────────────────────────────────────────
-
 export interface OutboxRow { id: string; processedOn: string; attempts: number; payload: any }
 
-/** FeePaymentReceivedEvent outbox rows for one payment. */
+/** FeePaymentReceivedEvent outbox rows for one payment. PaymentId is at the top of the event contract (PR 555 cycle 2). */
 export async function receiptOutbox(paymentId: string): Promise<OutboxRow[]> {
   const rows = await sql(`
     select "Id", coalesce("ProcessedOn"::text, ''), "Attempts", "PayloadJson"::text from "OutboxMessages"
-    where "EventType" = 'FeePaymentReceivedEvent' and "PayloadJson"->'Receipt'->>'PaymentId' = ${q(paymentId)}`);
+    where "EventType" = 'FeePaymentReceivedEvent' and "PayloadJson"->>'PaymentId' = ${q(paymentId)}`);
   return rows.map((r) => ({ id: r[0], processedOn: r[1], attempts: Number(r[2]), payload: JSON.parse(r[3]) }));
 }
 
@@ -224,8 +541,6 @@ export async function waitOutboxProcessed(paymentId: string, timeout = 120_000):
 export async function paymentsByClientId(tenantId: string, clientPaymentId: string): Promise<string[]> {
   return (await sql(`select "Id" from "FeePayments" where "TenantId" = ${q(tenantId)} and "ClientPaymentId" = ${q(clientPaymentId)}`)).map((r) => r[0]);
 }
-
-// ── Queued WhatsApp receipt rows (Mongo, accounts DB) ────────────────────────────────────────
 
 export interface ReceiptRow {
   _id: string;
@@ -246,6 +561,7 @@ export interface ReceiptRow {
     LanguageCode: string;
     BodyParameters: { Name: string; Value: string }[];
     Document: { Html: string; FileName: string } | null;
+    FeeReceipt: unknown;
     RecipientContext: string;
   } | null;
 }
@@ -284,3 +600,28 @@ export async function waitReceiptProcessed(tenantId: string, paymentId: string, 
 }
 
 export const bodyParam = (row: ReceiptRow, name: string) => row.message?.BodyParameters.find((p) => p.Name === name)?.Value;
+
+/** Server receipt HTML (FeePaymentReceiptPdfBuilder.Build). After PR 555's comment-resolve, the queued row stores FeeReceipt data, not Document HTML. */
+export async function receiptDocumentHtml(row: ReceiptRow): Promise<string> {
+  const cached = row.message?.Document?.Html;
+  if (cached) return cached;
+  if (!row.message?.FeeReceipt) throw new Error(`receipt row ${row._id} has no Document.Html or FeeReceipt to render`);
+  const project = path.join(__dirname, '..', 'tools/render-fee-receipt/render-fee-receipt.csproj');
+  const mpDir = process.env.QA_CI_MP_DIR;
+  if (!mpDir) throw new Error('receiptDocumentHtml: QA_CI_MP_DIR is not set (path to the MarksheetPlus checkout)');
+  return new Promise((resolve, reject) => {
+    const child = spawn('dotnet', ['run', '--project', project, '--no-build', `-p:MPDir=${mpDir}`], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    child.stdout.on('data', (d) => out.push(d));
+    child.stderr.on('data', (d) => err.push(d));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      const stdout = Buffer.concat(out).toString('utf8');
+      const stderr = Buffer.concat(err).toString('utf8');
+      if (code === 0 && stdout.includes('fee-receipt-pdf')) resolve(stdout);
+      else reject(new Error(`render-fee-receipt exit ${code}: ${stderr || stdout.slice(0, 500)}`));
+    });
+    child.stdin.end(JSON.stringify(row.message));
+  });
+}

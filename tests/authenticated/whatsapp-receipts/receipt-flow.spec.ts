@@ -21,7 +21,7 @@ import {
 } from '../../../fixtures/quota';
 import {
   addStudent, bodyParam, createSchoolPolicy, dbSetup, familyMobile, familyOutstanding, getReceipt, pay, payBody, paymentsByClientId, personName, q,
-  receiptDedupeKey, receiptOutbox, receiptRow, receiptRows, setupSchool, sql, waitForChallans, waitOutboxProcessed, waitReceiptProcessed,
+  receiptDedupeKey, receiptDocumentHtml, receiptOutbox, receiptRow, receiptRows, setupSchool, sql, waitForChallans, waitOutboxProcessed, waitReceiptProcessed,
   waitReceiptRow, type ReceiptRow, type Student,
 } from '../../../fixtures/fees';
 
@@ -75,8 +75,10 @@ test.beforeAll(async () => {
   await dbSetup('F0: no father/mother mobile (guardian mobile only)', `update "Families" set "FatherMobile" = '', "MotherMobile" = NULL, "GuardianMobile" = '03351234500' where "Id" = ${q(f0.familyId)}`);
   await dbSetup('F1: Urdu + HTML special characters in student and father names', `update "Students" set "Name" = ${q(URDU_STUDENT)} where "Id" = ${q(f1.id)}; update "Families" set "FatherName" = ${q(URDU_FATHER)} where "Id" = ${q(f1.familyId)}`);
 
-  await createSchoolPolicy(owner, TUITION);
-  await waitForChallans(owner.tenantId, [f3[0].familyId, f1.familyId, f0.familyId]);
+  await createSchoolPolicy(owner, { tuition: TUITION });
+  for (const familyId of [f3[0].familyId, f1.familyId, f0.familyId]) {
+    await waitForChallans(owner.tenantId, 1, `c."FamilyId" = ${q(familyId)}`);
+  }
 });
 
 test.afterAll(async () => {
@@ -134,18 +136,20 @@ test('AC1 + AC4: with Fee receipt ON, a partial payment for 3 siblings queues ON
   const outbox = await waitOutboxProcessed(mainPaymentId);
   expect(await receiptOutbox(mainPaymentId)).toHaveLength(1);
   // The family's father mobile is stored normalized (+92…) by quick-add.
-  expect(outbox.payload.Receipt).toMatchObject({ PaymentId: mainPaymentId, ContactNumber: `+92${f3Mobile.slice(1)}`, TotalPaid: 3200 });
+  expect(outbox.payload).toMatchObject({ PaymentId: mainPaymentId, GuardianPhone: `+92${f3Mobile.slice(1)}` });
+  expect(outbox.payload.Receipt).toMatchObject({ TotalPaid: 3200 });
   await saveEvidence('ac1-outbox-payload.json', JSON.stringify(outbox.payload, null, 2));
 
   mainRow = await waitReceiptProcessed(owner.tenantId, mainPaymentId);
-  await saveEvidence('ac1-mongo-row.json', JSON.stringify({ ...mainRow, message: { ...mainRow.message, Document: { FileName: mainRow.message?.Document?.FileName, HtmlLength: mainRow.message?.Document?.Html.length } } }, null, 2));
-  await saveEvidence('ac1-receipt-document.html', mainRow.message!.Document!.Html);
+  const sentHtml = await receiptDocumentHtml(mainRow);
+  await saveEvidence('ac1-mongo-row.json', JSON.stringify({ ...mainRow, message: { ...mainRow.message, Document: mainRow.message?.Document ? { FileName: mainRow.message.Document.FileName, HtmlLength: mainRow.message.Document.Html.length } : null, FeeReceiptPresent: !!mainRow.message?.FeeReceipt } }, null, 2));
+  await saveEvidence('ac1-receipt-document.html', sentHtml);
   expect(mainRow).toMatchObject({
     Kind: WA_KIND.FeePaymentReceipt, DedupeKey: receiptDedupeKey(owner.tenantId, mainPaymentId), RecipientReference: mainPaymentId,
     Status: WA_STATUS.Sent,
   });
   expect(mainRow.message!.ToPhoneNumber).toBe(`+92${f3Mobile.slice(1)}`);
-  expect(mainRow.message!.Document!.FileName).toBe('fee-receipt.pdf');
+  expect(sentHtml).toContain('Fee receipt');
   expect(bodyParam(mainRow, 'receipt_number')).toBe(mainReceipt.receiptNumber);
   expect(bodyParam(mainRow, 'amount')).toBe('Rs. 3,200');
   expect(bodyParam(mainRow, 'school_name')).toBe(owner.schoolName);
@@ -165,14 +169,14 @@ test('AC1 + AC4: with Fee receipt ON, a partial payment for 3 siblings queues ON
 });
 
 test('AC1: the queued receipt document matches the receipt API field by field (render → PDF + PNG evidence)', async ({ page }) => {
-  const html = mainRow.message!.Document!.Html;
+  const html = await receiptDocumentHtml(mainRow);
   const api = await getReceipt(owner.api, mainPaymentId);
   await saveEvidence('ac1-receipt-api.json', JSON.stringify(api, null, 2));
   await page.setContent(html, { waitUntil: 'load' });
   await page.pdf({ path: evidencePath('ac1-whatsapp-receipt.pdf'), format: 'A4', printBackground: true, preferCSSPageSize: true });
   await page.screenshot({ path: evidencePath('ac1-whatsapp-receipt.png'), fullPage: true });
 
-  const text = (await page.locator('main.fee-receipt-pdf').innerText()).replace(/\s+/g, ' ');
+  const text = (await page.locator('.fee-receipt-pdf').innerText()).replace(/\s+/g, ' ');
   const facts = await page.evaluate(() => Object.fromEntries(Array.from(document.querySelectorAll('dt')).map((dt) => [dt.textContent, dt.nextElementSibling?.textContent ?? ''])));
   await saveEvidence('ac1-receipt-facts.json', JSON.stringify(facts, null, 2));
   const dd = async (label: string) => facts[label];
@@ -200,13 +204,14 @@ test('AC1: the queued receipt document matches the receipt API field by field (r
 });
 
 test('R3: the Marksheet+ brand logo in the receipt PDF loads (no broken image)', async ({ page }) => {
-  test.fail(true, 'R3 open: the relative _content/ brand-logo URL cannot load in a standalone receipt document');
-  await page.setContent(mainRow.message!.Document!.Html, { waitUntil: 'load' });
+  const html = await receiptDocumentHtml(mainRow);
+  expect(html, 'server document must inline the brand logo').toContain('src="data:image/svg+xml;base64,');
+  expect(html, 'server document must not use a relative _content/ logo URL').not.toContain('_content/');
+  await page.setContent(html, { waitUntil: 'load' });
   const logo = page.locator('img.receipt-brand-logo');
   await expect(logo).toHaveCount(1);
-  console.log(`[R3] brand logo src="${await logo.getAttribute('src')}"`);
+  console.log(`[R3] brand logo src="${(await logo.getAttribute('src'))?.slice(0, 40)}…"`);
   await page.locator('header').screenshot({ path: evidencePath('r3-receipt-header-brand-logo.png') });
-  // A relative "_content/..." URL has no base in a standalone HTML document (Gotenberg renders index.html with outbound access off).
   expect(await logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0), 'brand logo image loaded').toBe(true);
 });
 
@@ -241,7 +246,7 @@ test('AC2: three CONCURRENT requests with one ClientPaymentId record one payment
 test('AC2: a family without a father/mother mobile gets no receipt row (the event is still relayed)', async () => {
   const receipt = await payOk(f0.familyId, 100);
   const outbox = await waitOutboxProcessed(receipt.paymentId);
-  expect(outbox.payload.Receipt.ContactNumber).toBe('');
+  expect(outbox.payload.GuardianPhone).toBe('');
   await new Promise((r) => setTimeout(r, 20_000));
   expect(await receiptRow(owner.tenantId, receipt.paymentId)).toBeUndefined();
 });
@@ -273,13 +278,13 @@ test('edge: Urdu / HTML special characters are encoded in the PDF and sent as pl
   const receipt = await payOk(f1.familyId, 300, { isOfflinePayment: true });
   const row = await waitReceiptProcessed(owner.tenantId, receipt.paymentId);
   expect(row.Status).toBe(WA_STATUS.Sent);
-  const html = row.message!.Document!.Html;
+  const html = await receiptDocumentHtml(row);
   await saveEvidence('edge-urdu-offline-document.html', html);
   expect(html).not.toContain('<Raza>');
   expect(html).toContain('&lt;Raza&gt;');
   await page.setContent(html);
   await page.screenshot({ path: evidencePath('edge-urdu-offline-receipt.png'), fullPage: true });
-  const text = await page.locator('main').innerText();
+  const text = await page.locator('.fee-receipt-pdf').innerText();
   expect(text).toContain('علی');
   expect(text).toContain('Provisional receipt');
   expect(receipt.isProvisionalReceipt).toBe(true);
@@ -287,12 +292,12 @@ test('edge: Urdu / HTML special characters are encoded in the PDF and sent as pl
 });
 
 test('R4: a fractional amount (250.75) is not rounded away on the receipt or in the message', async ({ page }) => {
-  test.fail(true, 'R4 open: the receipt PDF and the template amount format with N0');
+  test.fail(true, 'R4 still open: FormatAmount and the PDF N() still use N0, so 250.75 becomes Rs. 251 / PKR 251');
   const receipt = await payOk(f1.familyId, 250.75);
   const row = await waitReceiptProcessed(owner.tenantId, receipt.paymentId);
   console.log(`[fraction] api totalPaid=${receipt.totalPaid} message amount=${bodyParam(row, 'amount')}`);
-  await page.setContent(row.message!.Document!.Html);
-  const text = (await page.locator('main').innerText()).replace(/\s+/g, ' ');
+  await page.setContent(await receiptDocumentHtml(row));
+  const text = (await page.locator('.fee-receipt-pdf').innerText()).replace(/\s+/g, ' ');
   console.log(`[fraction] pdf total: ${text.match(/Total paid PKR [\d,.]+/)?.[0]}`);
   await page.screenshot({ path: evidencePath('edge-fraction-receipt.png'), fullPage: true });
   expect(receipt.totalPaid).toBe(250.75);
@@ -312,7 +317,7 @@ test('AC5 logo: an external or missing campus logo URL is omitted from the recei
       const receipt = await payOk(f1.familyId, 10);
       const row = await waitReceiptProcessed(owner.tenantId, receipt.paymentId);
       expect(row.Status, url).toBe(WA_STATUS.Sent);
-      const html = row.message!.Document!.Html;
+      const html = await receiptDocumentHtml(row);
       expect(html, url).not.toContain('alt="School logo"');
       expect(html, url).not.toContain('qa555-attacker');
       await page.setContent(html);
@@ -355,28 +360,6 @@ test('AC4: with every allocation used up, the receipt is Skipped QuotaExhausted,
   await saveEvidence('ac4-backoffice-customer-detail.json', JSON.stringify(detail, null, 2));
 });
 
-test('AC1: the WebApp receipt page and its print paper show the same receipt (screenshots + print PDF)', async ({ browser }) => {
-  test.setTimeout(4 * 60_000);
-  const page: Page = await browser.newPage({ baseURL: WEBAPP, ignoreHTTPSErrors: true });
-  try {
-    await signInToWebApp(page, owner);
-    await page.goto(`/accounts/fee-payment/receipts/${mainPaymentId}`);
-    const facts = page.locator('[data-receipt-details]');
-    await expect(facts).toBeVisible({ timeout: 60_000 });
-    await expect(page.locator('[data-receipt-fact="number"]')).toContainText(mainReceipt.receiptNumber);
-    await page.screenshot({ path: evidencePath('ac1-webapp-receipt-page.png'), fullPage: true });
-    await saveEvidence('ac1-webapp-receipt-page.txt', await facts.innerText());
-    await page.emulateMedia({ media: 'print' });
-    await page.pdf({ path: evidencePath('ac1-webapp-print-receipt.pdf'), format: 'A4', printBackground: true });
-    await page.screenshot({ path: evidencePath('ac1-webapp-print-receipt.png'), fullPage: true });
-    const paper = (await page.locator('[data-receipt-print-layout]').innerText()).replace(/\s+/g, ' ');
-    await saveEvidence('ac1-webapp-print-receipt.txt', paper);
-    expect(paper).toContain(mainReceipt.receiptNumber);
-  } finally {
-    await page.close();
-  }
-});
-
 test('R5 (pre-existing): GET fee-payments/payments/{malformed id}/receipt answers 400/404, not 500', async () => {
   test.fail(true, 'R5 open: GetFeePaymentReceipt turns a non-GUID id into a FormatException → 500 (also on main)');
   const statuses: Record<string, number> = {};
@@ -387,12 +370,40 @@ test('R5 (pre-existing): GET fee-payments/payments/{malformed id}/receipt answer
   for (const [id, status] of Object.entries(statuses)) expect(status, `GET receipt ${id}`).toBeLessThan(500);
 });
 
-test('R1 (AC5): with FeePaymentReceiptTemplateName unset (default ""), receipts are not sent and no credit is used (design doc: "remain Pending until configured")', async () => {
-  test.fail(true, 'R1 open: no guard for an empty FeePaymentReceiptTemplateName');
-  // The rows above were sent by the fake sender with an EMPTY template name and each charged a credit.
+test('R1 (AC5): the default template name is fee_payment_receipt, and a sent receipt uses that name (empty names wait — unit + live probe)', async () => {
+  // Cycle 1: default was "" and the fake sender marked the row Sent and charged a credit. Cycle 2: default and Worker appsettings are "fee_payment_receipt"; an empty name defers (unit: SendAsync_FeeReceipt_WaitsWithoutCallingMeta_WhenTheTemplateNameIsCleared).
   console.log(`[R1] main row: Status=${mainRow.Status} TemplateName="${mainRow.message?.TemplateName}" QuotaAllocationId=${mainRow.QuotaAllocationId}`);
   const fake = await workerLogMentions(`fee-receipt:${mainReceipt.receiptNumber}`);
   console.log(`[R1] worker log: ${fake.join(' | ')}`);
-  expect(mainRow.message?.TemplateName).toBe('');
-  expect(mainRow.Status, 'receipt with no configured template must stay Pending').toBe(WA_STATUS.Pending);
+  expect(mainRow.message?.TemplateName).toBe('fee_payment_receipt');
+  expect(mainRow.Status).toBe(WA_STATUS.Sent);
+  expect(mainRow.QuotaAllocationId, 'a sent receipt on an active campus uses a credit').toBeTruthy();
 });
+
+test('AC1: the WebApp receipt page and its print paper show the same receipt (screenshots + print PDF)', async ({ browser }) => {
+  test.setTimeout(4 * 60_000);
+  const page: Page = await browser.newPage({ baseURL: WEBAPP, ignoreHTTPSErrors: true });
+  try {
+    await signInToWebApp(page, owner);
+    await page.goto(`/accounts/fee-payment/receipts/${mainPaymentId}`);
+    // Cycle 2 page model: the receipt paper data is shown via FeeReceiptSummary (data-receipt-summary); FeeReceiptDetails (data-receipt-details) is the fallback when no sheet is present.
+    const facts = page.locator('[data-receipt-summary], [data-receipt-details]');
+    await expect(facts).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator('[data-receipt-fact="number"]')).toContainText(mainReceipt.receiptNumber);
+    await page.screenshot({ path: evidencePath('ac1-webapp-receipt-page.png'), fullPage: true });
+    await saveEvidence('ac1-webapp-receipt-page.txt', await facts.innerText());
+    await page.emulateMedia({ media: 'print' });
+    await page.pdf({ path: evidencePath('ac1-webapp-print-receipt.pdf'), format: 'A4', printBackground: true });
+    await page.screenshot({ path: evidencePath('ac1-webapp-print-receipt.png'), fullPage: true });
+    // With a sheet, the print host (#fee-receipt-print) renders FeeReceiptSheet (data-fee-receipt-sheet),
+    // not FeeReceiptPrintLayout (data-receipt-print-layout). The host is hidden until print media, so read via evaluate.
+    const paperHost = page.locator('#fee-receipt-print [data-fee-receipt-sheet], #fee-receipt-print [data-receipt-print-layout]');
+    await expect(paperHost).toBeAttached({ timeout: 15_000 });
+    const paper = (await paperHost.evaluate((el: HTMLElement) => el.innerText)).replace(/\s+/g, ' ');
+    await saveEvidence('ac1-webapp-print-receipt.txt', paper);
+    expect(paper).toContain(mainReceipt.receiptNumber);
+  } finally {
+    await page.close();
+  }
+});
+

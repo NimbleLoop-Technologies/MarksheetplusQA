@@ -136,7 +136,7 @@ test.describe('Linking an invite to an existing child (ut7, AC5–AC7)', () => {
     await expect(join.existingChildOption(own.name)).toBeChecked();
   });
 
-  test('connecting the suggested child links the school to that child: no duplicate, no new child (AC7)', async ({ freshParent, parentPage, adminPage }) => {
+  test('connecting the suggested child links the school to that child: no duplicate, no new child (AC7)', { tag: '@smoke' }, async ({ freshParent, parentPage, adminPage }) => {
     const first = uniqueFirst('Zain');
     const own = await addOwnChild(freshParent, `${first} Probe`, '2016-01-15');
     const student = await seedStudent({ firstName: first, lastName: 'Probe', dateOfBirth: '2016-01-15', parentPhone: freshParent.phone });
@@ -256,7 +256,7 @@ test.describe('Linking an invite to an existing child (ut7, AC5–AC7)', () => {
     expect(none.body).not.toContain('candidates');
   });
 
-  test('accepting with another family\'s child id is refused and links nothing', async ({ freshParent, adminPage }) => {
+  test('accepting with another family\'s child id is refused and links nothing', { tag: '@smoke' }, async ({ freshParent, adminPage }) => {
     const otherFamily = await createFamilyParent();
     const theirs = await addOwnChild(otherFamily, `${uniqueFirst('Other')} Probe`, '2015-05-05');
     const student = await seedStudent({ parentPhone: freshParent.phone });
