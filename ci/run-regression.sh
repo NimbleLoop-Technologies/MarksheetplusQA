@@ -326,13 +326,15 @@ has_feature() { # has_feature <project>
 		family-fees) grep -rqsF "View coming next cycle" "$SRC" --include=*.razor ;;
 		# PR 555 (WhatsApp fee receipts, CU-z94x8e9yhj): the receipt notification kind this PR introduced.
 		whatsapp-receipts) grep -rqsF "FeePaymentReceivedEvent" "$SRC" --include=*.cs ;;
+		# PR 558 (Stock Movements log + CSV export, CU-86exmwjgc / CU-86extv6wg): the log's empty-filter copy.
+		bookshop) grep -rqsF "No stock movements match your filters." "$SRC" --include=*.razor ;;
 		*) return 0 ;;
 	esac
 }
 if [[ "$QA_CI_SUITES" == auto ]]; then
 	SUITES=()
 	# challan-name waits on the 1-minute fee scheduler (~12 min per file) and must run at --workers=1.
-	for p in setup anonymous authenticated shell-notes whatsapp-quota whatsapp-receipts challan-name attendance-backdating payroll family-fees family-setup family; do
+	for p in setup anonymous authenticated shell-notes whatsapp-quota whatsapp-receipts challan-name attendance-backdating payroll family-fees bookshop family-setup family; do
 		if has_feature "$p"; then SUITES+=("$p"); else warn "skipping project $p: this MarksheetPlus checkout does not contain its feature yet"; fi
 	done
 else
