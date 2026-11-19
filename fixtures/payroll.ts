@@ -79,6 +79,8 @@ export interface StaffSeed {
   designationId?: string;
   /** yyyy-mm-dd; must not be in the future (AddStaff rule). Defaults to 1 Jan of last year. */
   joined?: string;
+  /** yyyy-mm-dd; defaults to 1990-05-05. */
+  dob?: string;
   incomeTaxPercent?: number | null;
   eobiPerMonth?: number | null;
   providentFundPercent?: number | null;
@@ -100,7 +102,7 @@ export async function addStaff(api: APIRequestContext, seed: StaffSeed): Promise
     const res = await api.post('staff', {
       data: {
         staffId: `QA-${letters(4).toUpperCase()}${randomInt(100, 999)}`,
-        fullName: name, cnic: cnic(), dateOfBirth: '1990-05-05', gender: 'Female', maritalStatus: null, bloodGroup: null,
+        fullName: name, cnic: cnic(), dateOfBirth: seed.dob ?? '1990-05-05', gender: 'Female', maritalStatus: null, bloodGroup: null,
         nationality: 'Pakistani', religion: 'Islam', profilePhotoUrl: null, cnicCopyUrl: null,
         mobileNumber: mobile(), alternateNumber: null, email: null,
         presentAddress: '1 QA Road, Lahore', permanentAddress: '1 QA Road, Lahore',

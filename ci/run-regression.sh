@@ -322,6 +322,8 @@ has_feature() { # has_feature <project>
 		# PR 547 (challan under family or student name, CU-z94x8eapp5): the fee policy switch it introduced.
 		challan-name) grep -rqsF "Generate challans under student name" "$SRC" --include=*.cs --include=*.razor ;;
 		payroll) [[ -f "$SRC/MarksheetPlus.FeeManagement/StaffPayroll/StaffPayroll.razor" ]] ;;
+		# PR 561 (UI migration QA fixes, CU-86ey2erpk): the struck-off profile's last class it introduced.
+		ui-migration) grep -rqsF "LastClassSection" "$SRC" --include=*.cs ;;
 		# PR 557 (Payments screen removed, CU-z94x8ed10y): the per-child next-cycle toggle on the Fees page.
 		family-fees) grep -rqsF "View coming next cycle" "$SRC" --include=*.razor ;;
 		# PR 555 (WhatsApp fee receipts, CU-z94x8e9yhj): the receipt notification kind this PR introduced.
@@ -334,7 +336,7 @@ has_feature() { # has_feature <project>
 if [[ "$QA_CI_SUITES" == auto ]]; then
 	SUITES=()
 	# challan-name waits on the 1-minute fee scheduler (~12 min per file) and must run at --workers=1.
-	for p in setup anonymous authenticated shell-notes whatsapp-quota whatsapp-receipts challan-name attendance-backdating payroll family-fees bookshop family-setup family; do
+	for p in setup anonymous authenticated shell-notes whatsapp-quota whatsapp-receipts challan-name attendance-backdating payroll ui-migration family-fees bookshop family-setup family; do
 		if has_feature "$p"; then SUITES+=("$p"); else warn "skipping project $p: this MarksheetPlus checkout does not contain its feature yet"; fi
 	done
 else

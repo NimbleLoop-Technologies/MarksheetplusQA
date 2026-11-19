@@ -52,9 +52,9 @@ export default defineConfig({
     {
       name: 'authenticated',
       testDir: './tests/authenticated',
-      // shell-notes, payroll, whatsapp-quota and whatsapp-receipts have their own projects (quota/receipts self-seed; no .auth/user.json).
+      // shell-notes, payroll, ui-migration, whatsapp-quota and whatsapp-receipts have their own projects (quota/receipts self-seed; no .auth/user.json).
       // attendance-backdating and challan-name need the local stack's Postgres and run serially (projects below).
-      testIgnore: [/shell-notes\//, /payroll\//, /whatsapp-quota\//, /whatsapp-receipts\//, /attendance-backdating\//, /challan-name\//],
+      testIgnore: [/shell-notes\//, /payroll\//, /ui-migration\//, /whatsapp-quota\//, /whatsapp-receipts\//, /attendance-backdating\//, /challan-name\//],
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
@@ -68,6 +68,17 @@ export default defineConfig({
       testDir: './tests/authenticated/shell-notes',
       retries: 0,
       timeout: 2 * 60_000,
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: path.join(__dirname, '.auth', 'user.json'),
+      },
+      dependencies: ['setup'],
+    },
+    {
+      // PR 561 UI migration QA fixes (CU-86ey2erpk): POS tender size, custom subject rows, struck-off profile class.
+      // Seeded CI owner; each test makes its own class / student / item. Gated in ci/run-regression.sh (has_feature).
+      name: 'ui-migration',
+      testDir: './tests/authenticated/ui-migration',
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
