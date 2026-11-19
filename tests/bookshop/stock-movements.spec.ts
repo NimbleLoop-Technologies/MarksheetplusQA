@@ -659,6 +659,96 @@ test.describe('Stock Movements export (86extv6wg)', () => {
     await ctx.close();
   });
 
+  // z94x8ednd3 cycle 3: after 49ff46b5, page turns, sort, search and the tiles must also keep the applied period
+  // (cycle 2 only failed the export; Dan's fix put every request on the one applied period).
+  test('with Custom selected and no dates, page turns, sort, search, tiles and Export stay on the applied Last 30 days @smoke', async ({ browser }) => {
+    const ctx = await ownerContext(browser, A);
+    const page = await openLog(ctx);
+    await expectRowCount(page, 10);
+    await expectTiles(page, [13, 6, 5, 2]);
+    const sent: { path: string; q: URLSearchParams }[] = [];
+    page.on('request', (r) => {
+      const u = new URL(r.url());
+      if (u.pathname.includes('/stock-movements/')) sent.push({ path: u.pathname, q: u.searchParams });
+    });
+    const applied = () => ({ from: b.utcDate(29), to: b.utcDate(0) });
+    const datesOf = (q?: URLSearchParams) => q ? { from: q.get('dateFrom'), to: q.get('dateTo') } : undefined;
+    const thisMonthFrom = b.utcDate(0).slice(0, 8) + '01';
+
+    await page.getByRole('combobox', { name: 'Date range' }).selectOption({ label: 'Custom' });
+    await page.waitForTimeout(1000);
+    await expectRowCount(page, 10);
+    await expectTiles(page, [13, 6, 5, 2]);
+
+    // This month would be 12 rows, so page 2 would have 2 rows and the tiles would drop the 29-day-old adjustment.
+    await page.getByRole('button', { name: /Next/ }).click();
+    await expectRowCount(page, 3);
+    await expectTiles(page, [13, 6, 5, 2]);
+    const page2 = [...sent].reverse().find((s) => s.path.includes('/paged') && s.q.get('page') === '2');
+    expect(datesOf(page2?.q), 'page 2 keeps the applied Last 30 days').toEqual(applied());
+    expect(page2?.q.get('dateFrom'), 'must not fall back to This month').not.toBe(thisMonthFrom);
+    await shot(page, 'custom-unset-page2', false);
+    await page.getByRole('button', { name: /Previous|Prev/ }).first().click();
+    await expectRowCount(page, 10);
+
+    const beforeSort = sent.length;
+    await table(page).getByRole('columnheader', { name: 'Quantity' }).getByRole('button').click();
+    await expectRowCount(page, 10);
+    await expectTiles(page, [13, 6, 5, 2]);
+    const sortQ = sent.slice(beforeSort).filter((s) => s.path.includes('/paged') && s.q.get('sortBy') === 'quantity').pop();
+    expect(datesOf(sortQ?.q), 'sort keeps the applied period').toEqual(applied());
+
+    const csv = await exportCsv(page);
+    await mkdir(EV, { recursive: true });
+    await writeFile(path.join(EV, 'sm558-export-custom-unset-after-sort.csv'), csv.raw);
+    expect({ name: csv.name, rows: csv.rows.length - 1 }).toEqual({ name: fileName(b.utcDate(29), b.utcDate(0)), rows: 13 });
+    expect(csv.rows.slice(1).some((r) => r[0] === b.utcDate(29) && r[4] === 'Stock Correction'), 'the 29-day-old row stays in the export').toBe(true);
+
+    const beforeSearch = sent.length;
+    await search(page, 'Oxford');
+    const searchQ = sent.slice(beforeSearch).filter((s) => s.path.includes('/paged') && (s.q.get('search') ?? '').toLowerCase().includes('oxford')).pop();
+    expect(datesOf(searchQ?.q), 'search keeps the applied period').toEqual(applied());
+    const oxfordCsv = await exportCsv(page);
+    expect(oxfordCsv.name).toBe(fileName(b.utcDate(29), b.utcDate(0)));
+    expect(oxfordCsv.rows.slice(1).some((r) => r[0] === b.utcDate(29) && r[4] === 'Stock Correction')).toBe(true);
+    await shot(page, 'custom-unset-after-search', false);
+    await ctx.close();
+  });
+
+  test('with an invalid Custom range, page turns, sort, search, tiles and Export stay on the applied Last 30 days', async ({ browser }) => {
+    const ctx = await ownerContext(browser, A);
+    const page = await openLog(ctx);
+    await expectRowCount(page, 10);
+    const sent: URLSearchParams[] = [];
+    page.on('request', (r) => { if (r.url().includes('/stock-movements/')) sent.push(new URL(r.url()).searchParams); });
+    await customRange(page, b.utcDate(5), b.utcDate(10));
+    await expect(page.getByText(COPY.order, { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expectRowCount(page, 10);
+    await expectTiles(page, [13, 6, 5, 2]);
+
+    await page.getByRole('button', { name: /Next/ }).click();
+    await expectRowCount(page, 3);
+    await expectTiles(page, [13, 6, 5, 2]);
+    const page2 = [...sent].reverse().find((q) => q.get('page') === '2');
+    expect({ from: page2?.get('dateFrom'), to: page2?.get('dateTo') }).toEqual({ from: b.utcDate(29), to: b.utcDate(0) });
+    await page.getByRole('button', { name: /Previous|Prev/ }).first().click();
+    await expectRowCount(page, 10);
+
+    const beforeSort = sent.length;
+    await table(page).getByRole('columnheader', { name: 'Item' }).getByRole('button').click();
+    await expectRowCount(page, 10);
+    const sortQ = sent.slice(beforeSort).filter((q) => q.get('sortBy') === 'item').pop();
+    expect({ from: sortQ?.get('dateFrom'), to: sortQ?.get('dateTo') }).toEqual({ from: b.utcDate(29), to: b.utcDate(0) });
+    await expectTiles(page, [13, 6, 5, 2]);
+
+    const beforeSearch = sent.length;
+    await search(page, 'Notebook');
+    const searchQ = sent.slice(beforeSearch).filter((q) => (q.get('search') ?? '').toLowerCase().includes('notebook')).pop();
+    expect({ from: searchQ?.get('dateFrom'), to: searchQ?.get('dateTo') }).toEqual({ from: b.utcDate(29), to: b.utcDate(0) });
+    await shot(page, 'custom-invalid-after-search', false);
+    await ctx.close();
+  });
+
   test('the export follows the sort it is given (API: quantity ascending, item descending)', async () => {
     for (const sort of ['sortBy=quantity&sortDir=asc', 'sortBy=item&sortDir=desc', 'sortBy=user&sortDir=asc']) {
       const res = await A.api.get(`bookshop/stock-movements/export?${last30()}&${sort}`);
@@ -881,6 +971,45 @@ test.describe('Permissions, tenants and validation', () => {
     await shot(page, 'mobile-pixel5');
     const csv = await exportCsv(page);
     expect(csv.rows.length - 1).toBe(13);
+    await ctx.close();
+  });
+});
+
+// ── PR 558 review fixes in ab53aab0 (T5 / T6) ───────────────────────────────────────────────────
+
+test.describe('Item detail user after the CreatedByName backfill (T5)', () => {
+  // T5: after the backfill stamps ModifiedBy as System, item detail must show the stored CreatedByName, never "by System".
+  test('item detail names a backfilled movement by its stored CreatedByName, not the System stamp', async ({ browser }) => {
+    const item = await b.createItem(A, { name: 'Backfill Probe Pen' });
+    const before = await f.sql(`select "Id","CreatedByName","CreatedBy","ModifiedBy" from "BookshopStockMovements" where "BookshopItemId" = ${f.sqlQuote(item.id)}`);
+    expect(before.length, `opening movement for ${item.id}: ${JSON.stringify(before)}`).toBeGreaterThan(0);
+    const storedName = before[0][1];
+    expect(storedName, 'opening stock should already carry a display name').toBeTruthy();
+    expect(storedName, 'the stored name itself must not be System').not.toMatch(/^System$/i);
+    await f.dbSetup(`PR 558 T5: stamp ModifiedBy=System on the opening movement of ${item.id} (as the CreatedByName backfill does)`, `
+      update "BookshopStockMovements"
+      set "ModifiedBy" = 'System', "ModifiedDate" = now() at time zone 'utc'
+      where "BookshopItemId" = ${f.sqlQuote(item.id)}`);
+    const after = await f.sql(`select "CreatedByName","ModifiedBy" from "BookshopStockMovements" where "BookshopItemId" = ${f.sqlQuote(item.id)}`);
+    expect(after[0][0]).toBe(storedName);
+    expect(after[0][1]).toBe('System');
+
+    const ctx = await ownerContext(browser, A);
+    const page = await ctx.newPage();
+    await page.goto(`/bookshop/inventory/${item.id}`);
+    await expect(page.getByRole('heading', { name: item.name })).toBeVisible({ timeout: 60_000 });
+    const movements = page.locator('[data-item-movements]');
+    await expect(movements.getByText(storedName, { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(movements).not.toContainText(/^System$|\bby System\b/);
+    const lastUpdated = page.locator('[data-tile="last-updated"]');
+    await expect(lastUpdated).toContainText(`by ${storedName}`);
+    await expect(lastUpdated).not.toContainText('by System');
+    await shot(page, 'item-detail-backfilled-user', false);
+    // The Stock Movements log names the same movement the same way.
+    const log = await openLog(ctx, `${LOG}?item=${item.id}`);
+    await expectRowCount(log, 1);
+    await expect(bodyRows(log)).toContainText(storedName);
+    await expect(bodyRows(log)).not.toContainText('System');
     await ctx.close();
   });
 });
