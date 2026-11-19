@@ -250,23 +250,76 @@ test.describe('Stock Movements log (86exmwjgc)', () => {
     await ctx.close();
   });
 
-  test('Date, Item, Reason, Quantity and User headers sort the table; Before, After and Notes do not', async ({ browser }) => {
+  // z94x8ednd0 (cycle 1 H1, high): the headers were not buttons. Cycle 2: each header is a button, sets aria-sort, asks the server
+  // for sortBy=<key> (asc, then desc on a second click), and the rows on screen - page 1 and page 2 - are the server's order for that
+  // sort (so the sort covers the whole result, not only the rows of one page). Before, After and Notes stay plain.
+  test('Date, Item, Reason, Quantity and User headers sort the table both ways across pages; Before, After and Notes do not @smoke', async ({ browser }) => {
     const ctx = await ownerContext(browser, A);
     const page = await openLog(ctx);
     await expectRowCount(page, 10);
-    const sorts: string[] = [];
-    page.on('request', (r) => { if (r.url().includes('/stock-movements/paged')) sorts.push(new URL(r.url()).searchParams.get('sortBy') ?? ''); });
+    const sent: URLSearchParams[] = [];
+    page.on('request', (r) => { if (r.url().includes('/stock-movements/paged')) sent.push(new URL(r.url()).searchParams); });
     const failures: string[] = [];
-    for (const [header, key] of [['Quantity', 'quantity'], ['Item', 'item'], ['Reason', 'reason'], ['User', 'user'], ['Date', 'date']] as const) {
+    const key = (r: any) => `${r.itemName} ${r.reason}`;
+    const matches = (ui: string[], api: any[]) => ui.length === api.length && ui.every((t, i) => t.includes(api[i].itemName) && t.includes(api[i].reason));
+    for (const [header, sortKey] of [['Quantity', 'quantity'], ['Item', 'item'], ['Reason', 'reason'], ['User', 'user'], ['Date', 'date']] as const) {
       const th = table(page).getByRole('columnheader', { name: header });
-      const before = sorts.length;
-      await th.click();
-      await page.waitForTimeout(1500);
-      const sortable = (await th.getByRole('button').count()) > 0 || (await th.getAttribute('aria-sort')) !== null;
-      if (!sortable || !sorts.slice(before).includes(key)) failures.push(`${header}: header button=${sortable}, requests after click=${JSON.stringify(sorts.slice(before))}`);
+      for (const click of [1, 2]) {
+        const before = sent.length;
+        const btn = th.getByRole('button');
+        if ((await btn.count()) === 0) { failures.push(`${header}: no header button`); break; }
+        await btn.first().click();
+        await expect.poll(() => sent.slice(before).some((q) => q.get('sortBy') === sortKey), { timeout: 10_000 }).toBe(true).catch(() => {});
+        const q = sent.slice(before).filter((x) => x.get('sortBy') === sortKey).pop();
+        if (!q) { failures.push(`${header} click ${click}: no request with sortBy=${sortKey} (sent ${JSON.stringify(sent.slice(before).map((x) => x.toString()))})`); continue; }
+        const dir = q.get('sortDir') ?? 'asc';
+        await expectRowCount(page, 10);
+        await page.waitForTimeout(500);
+        const aria = await th.getAttribute('aria-sort');
+        const want = dir === 'desc' ? 'descending' : 'ascending';
+        if (aria !== want) failures.push(`${header} click ${click}: sortDir=${dir} but aria-sort=${aria}`);
+        const api = await pagedAll(A, `${last30()}&sortBy=${sortKey}&sortDir=${dir}`);
+        const ui1 = await rowTexts(page);
+        if (!matches(ui1, api.slice(0, 10))) failures.push(`${header} ${dir} page 1: ui=${JSON.stringify(ui1.map((t) => t.slice(0, 60)))} api=${JSON.stringify(api.slice(0, 10).map(key))}`);
+        if (click === 2) {
+          await page.getByRole('button', { name: /Next/ }).click();
+          await expectRowCount(page, 3);
+          const ui2 = await rowTexts(page);
+          if (!matches(ui2, api.slice(10))) failures.push(`${header} ${dir} page 2: ui=${JSON.stringify(ui2.map((t) => t.slice(0, 60)))} api=${JSON.stringify(api.slice(10).map(key))}`);
+          await page.getByRole('button', { name: /Previous|Prev/ }).first().click();
+          await expectRowCount(page, 10);
+        }
+        if (click === 1) console.log(`${header}: first click sortDir=${dir}, aria-sort=${aria}`);
+        if (header === 'Date' && click === 1) await shot(page, 'sort-date-first-click', false);
+      }
+      if (header === 'Quantity') await shot(page, 'sort-quantity', false);
+    }
+    const dirs = sent.map((q) => `${q.get('sortBy')}:${q.get('sortDir')}`);
+    console.log(`requests: ${dirs.join(' ')}`);
+    for (const plain of ['Before', 'After', 'Notes']) {
+      const th = table(page).getByRole('columnheader', { name: plain });
+      if ((await th.getByRole('button').count()) > 0) failures.push(`${plain}: should not be sortable`);
     }
     await shot(page, 'sort-headers', false);
     expect(failures, 'sortable headers').toEqual([]);
+    await ctx.close();
+  });
+
+  test('Export after a header sort downloads the rows in the sorted order (Quantity ascending, then Item descending)', async ({ browser }) => {
+    const ctx = await ownerContext(browser, A);
+    const page = await openLog(ctx);
+    await expectRowCount(page, 10);
+    const sent: URLSearchParams[] = [];
+    page.on('request', (r) => { if (r.url().includes('/stock-movements/')) sent.push(new URL(r.url()).searchParams); });
+    for (const [header, clicks] of [['Quantity', 1], ['Item', 2]] as const) {
+      for (let i = 0; i < clicks; i++) { await table(page).getByRole('columnheader', { name: header }).getByRole('button').click(); await page.waitForTimeout(1200); }
+      await expectRowCount(page, 10);
+      const q = sent.filter((x) => x.get('sortBy')).pop()!;
+      const csv = await exportCsv(page);
+      const api = await pagedAll(A, `${last30()}&sortBy=${q.get('sortBy')}&sortDir=${q.get('sortDir')}`);
+      console.log(`${header}: export after sortBy=${q.get('sortBy')}&sortDir=${q.get('sortDir')}: ${csv.rows.length - 1} rows`);
+      expect(csv.rows.slice(1).map((r) => `${r[1]}|${r[4]}|${r[5]}`), `${header} export order`).toEqual(api.map((s) => `${s.itemName}|${s.reason}|${s.quantity}`));
+    }
     await ctx.close();
   });
 
@@ -282,7 +335,8 @@ test.describe('Stock Movements log (86exmwjgc)', () => {
     expect(users.every((r) => r.user && r.user !== 'Unknown user'), 'every row names its user').toBe(true);
   });
 
-  test('same-day movements keep one order: a first visit (sortBy=date desc) and a return visit list them the same way', async ({ browser }) => {
+  // z94x8ednd1 (cycle 1 N1): same-day rows flipped between a first visit (sortBy=date desc) and a return visit (no sortBy), and the CSV followed.
+  test('same-day movements keep one order: a first visit (sortBy=date desc) and a return visit list and export them the same way, newest first @smoke', async ({ browser }) => {
     const explicit = (await f.ok(await A.api.get(`bookshop/stock-movements/paged?page=1&pageSize=10&${last30()}&sortBy=date&sortDir=desc`), 'explicit')).items;
     const implicit = (await f.ok(await A.api.get(`bookshop/stock-movements/paged?page=1&pageSize=10&${last30()}`), 'implicit')).items;
     const todayExplicit = explicit.filter((r: any) => r.movementDate.startsWith(b.utcDate(0))).map((r: any) => `${r.reason} ${r.itemName}/${r.variantName ?? ''}`);
@@ -295,16 +349,29 @@ test.describe('Stock Movements log (86exmwjgc)', () => {
     const page = await openLog(ctx);
     await expectRowCount(page, 10);
     const first = (await rowTexts(page)).slice(0, 4);
+    const csvFirst = await exportCsv(page);
     await page.goto('/bookshop/inventory');
     await page.waitForTimeout(2000);
     await page.goto(LOG);
     await expectRowCount(page, 10);
     await page.waitForTimeout(1000);
     const again = (await rowTexts(page)).slice(0, 4);
+    const csvAgain = await exportCsv(page);
     console.log(`UI requests:\n${urls.join('\n')}\nfirst visit top rows:\n${first.join('\n')}\nreturn visit top rows:\n${again.join('\n')}`);
     await shot(page, 'same-day-order-return-visit', false);
     await ctx.close();
     expect(todayExplicit, 'same-day order with sortBy=date desc equals the default order (most recent first)').toEqual(todayImplicit);
+    expect(again, 'the top rows on a return visit equal the first visit').toEqual(first);
+    expect(csvAgain.raw, 'two exports of the same view are identical').toBe(csvFirst.raw);
+    // Newest first inside the day: Created At (column 10) never increases down today's rows.
+    const created = csvFirst.rows.slice(1).filter((r) => r[0] === b.utcDate(0)).map((r) => Date.parse(r[9]));
+    expect(created.length, 'several movements today').toBeGreaterThan(1);
+    expect(created, 'same-day rows newest first').toEqual([...created].sort((x, y) => y - x));
+    // Date ascending: oldest first inside the day (Created At never decreases). Rows recorded in the same microsecond (a variant
+    // item's opening stock rows) keep the Id tie-break in both directions, which is fine.
+    const ascCsv = await A.api.get(`bookshop/stock-movements/export?${last30()}&sortBy=date&sortDir=asc`);
+    const ascCreated = b.parseCsv(await ascCsv.text()).filter((r) => r.length > 1).slice(1).filter((r) => r[0] === b.utcDate(0)).map((r) => Date.parse(r[9]));
+    expect(ascCreated, 'Date ascending lists the same day oldest first').toEqual([...ascCreated].sort((x, y) => x - y));
   });
 
   test('Reason multi-select filters to the ticked codes, the KPI strip follows, and unticking all clears the filter @smoke', async ({ browser }) => {
@@ -394,7 +461,8 @@ test.describe('Stock Movements log (86exmwjgc)', () => {
     await ctx.close();
   });
 
-  test('a network failure shows the exact copy with a Retry button, and retrying recovers the table', async ({ browser }) => {
+  // z94x8ednd2 (cycle 1 L1, Umair 2026-11-16): the button reads "Retry" and the sentence appears once (no repeated second line).
+  test('a network failure shows the exact copy once with a Retry button, and retrying recovers the table @smoke', async ({ browser }) => {
     const ctx = await ownerContext(browser, A);
     const page = await ctx.newPage();
     await page.route('**/bookshop/stock-movements/paged**', (r) => r.abort('internetdisconnected'));
@@ -403,6 +471,11 @@ test.describe('Stock Movements log (86exmwjgc)', () => {
     const retry = page.getByRole('button', { name: /^(Retry|Try again)$/ });
     await expect(retry).toBeVisible();
     const label = (await retry.innerText()).trim();
+    const alert = page.locator('[data-load-error]');
+    const alertText = (await alert.innerText()).replace(/\s+/g, ' ');
+    const repeats = (alertText.match(/check your connection/gi) ?? []).length;
+    const toasts = await page.getByText('A network error occurred', { exact: false }).count();
+    console.log(`alert text: ${alertText} | button: ${label} | generic network toasts: ${toasts}`);
     await shot(page, 'network-failure', false);
     await page.unroute('**/bookshop/stock-movements/paged**');
     await retry.click();
@@ -410,6 +483,7 @@ test.describe('Stock Movements log (86exmwjgc)', () => {
     await expectTiles(page, [13, 6, 5, 2]);
     // Confirmed by Umair on 2026-11-16: the button must read "Retry" as in the story (finding L1, filed as a normal bug).
     expect(label, 'the story names the button "Retry"').toBe('Retry');
+    expect(repeats, 'the sentence appears once in the alert').toBe(1);
     await ctx.close();
   });
 
@@ -546,7 +620,8 @@ test.describe('Stock Movements export (86extv6wg)', () => {
     await ctx.close();
   });
 
-  test('picking Custom before both dates are set keeps the rows on screen, and the export still matches them', async ({ browser }) => {
+  // z94x8ednd3 (cycle 1 N2): Custom with no dates exported "This month" instead of the rows on screen.
+  test('picking Custom before both dates are set keeps the rows on screen, and the export still matches them @smoke', async ({ browser }) => {
     const ctx = await ownerContext(browser, A);
     const page = await openLog(ctx);
     await expectRowCount(page, 10);
@@ -562,6 +637,24 @@ test.describe('Stock Movements export (86extv6wg)', () => {
     console.log(`custom (unset) export: ${csv.name}, ${csv.rows.length - 1} rows; dates ${[...new Set(csv.rows.slice(1).map((r) => r[0]))].join(',')}`);
     await mkdir(EV, { recursive: true });
     await writeFile(path.join(EV, 'sm558-export-custom-unset.csv'), csv.raw);
+    expect({ name: csv.name, rows: csv.rows.length - 1 }).toEqual({ name: fileName(b.utcDate(29), b.utcDate(0)), rows: 13 });
+    await ctx.close();
+  });
+
+  // z94x8ednd3, second path from the ticket: an end date before the start date (the picker shows its message, the list is not reloaded).
+  test('with an invalid Custom range on screen, Export still matches the rows shown (or is unavailable)', async ({ browser }) => {
+    const ctx = await ownerContext(browser, A);
+    const page = await openLog(ctx);
+    await expectRowCount(page, 10);
+    await customRange(page, b.utcDate(5), b.utcDate(10));
+    await expect(page.getByText(COPY.order, { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expectRowCount(page, 10);
+    await expectTiles(page, [13, 6, 5, 2]);
+    await shot(page, 'custom-invalid-before-export', false);
+    if (await exportButton(page).isDisabled()) { console.log('Export disabled while the range is invalid'); await ctx.close(); return; }
+    const csv = await exportCsv(page);
+    console.log(`custom (invalid) export: ${csv.name}, ${csv.rows.length - 1} rows`);
+    await writeFile(path.join(EV, 'sm558-export-custom-invalid.csv'), csv.raw);
     expect({ name: csv.name, rows: csv.rows.length - 1 }).toEqual({ name: fileName(b.utcDate(29), b.utcDate(0)), rows: 13 });
     await ctx.close();
   });
