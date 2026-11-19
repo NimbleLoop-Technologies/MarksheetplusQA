@@ -8,7 +8,7 @@
  *    keeps the typed value (repeated, since cycle 3 saw it 3/3).
  *  - z94x8edtej (NF4): on a Pixel 5 the draft register fits the screen, salary/net/exception/action ride under the name,
  *    and the panel opened from the phone button is on screen and saves. Other phone widths are measured too.
- *  - NF5 (new in cycle 4): from sm up to ~1024 px the draft register still scrolls sideways and the open panel's net is off screen.
+ *  - NF5 (cycle 4, not filed per Umair 2026-11-19): from sm up to ~1024 px the draft register scrolls sideways; its check is skipped.
  * DB MANIPULATION (logged in the evidence): a published run is moved to an earlier month to free the current one.
  */
 import { devices, expect, test, type Page } from '@playwright/test';
@@ -321,7 +321,8 @@ test.describe('Cycle 4 — the items filed after cycle 3', () => {
     }
   });
 
-  test('C4-WIDTHS-TABLET (new, NF5): from sm up (640-1024 px: small tablets, iPad portrait/landscape) the draft register and the open panel do not scroll sideways', async ({ browser }) => {
+  // NF5 not filed per Umair 2026-11-19: the tablet-width (640-1024 px) overflow is recorded in the cycle 4 report but not tracked as a bug.
+  test.skip('C4-WIDTHS-TABLET (NF5, not filed): from sm up (640-1024 px: small tablets, iPad portrait/landscape) the draft register and the open panel do not scroll sideways', async ({ browser }) => {
     const out = await measureWidths(browser, [640, 700, 768, 820, 1024], 'c4-widths-tablet.json');
     for (const [width, m] of Object.entries(out)) {
       expect.soft(m.pageOverflowClosed, `${width}px page overflow`).toBeLessThanOrEqual(1);
