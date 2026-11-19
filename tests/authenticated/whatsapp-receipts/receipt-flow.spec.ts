@@ -34,6 +34,8 @@ let pkg: QuotaPackageRow;
 let f3: Student[];
 let f1: Student;
 let f0: Student;
+/** Extra family reserved for R4 amount-format payments (needs enough outstanding for 1,234.50 + smaller amounts). */
+let fR: Student[];
 let f3Mobile: string;
 let f3Father: string;
 /** The main sent receipt (F3 partial payment). */
@@ -45,9 +47,11 @@ let mainRow: ReceiptRow;
 const TUITION = 1500;
 const URDU_STUDENT = 'علی <Raza> & Sons';
 const URDU_FATHER = 'محمد "Imran" O\'Neil';
+const ALL_METERED = [WA_KIND.ResultPublished, WA_KIND.FeePaymentReceipt, WA_KIND.PendingDues];
 
-const setPrefs = async (disabledKinds: number[]) => {
-  const res = await owner.api.put('campus/notification-preferences', { data: { disabledKinds } });
+/** New-client save: send knownKinds so Fee receipt can be switched on or off. An older client omits knownKinds. */
+const setPrefs = async (disabledKinds: number[], knownKinds: number[] = ALL_METERED) => {
+  const res = await owner.api.put('campus/notification-preferences', { data: { disabledKinds, knownKinds } });
   expect(res.status(), await res.text()).toBe(200);
 };
 const quota = async () => (await owner.api.get('subscription/quota')).json();
@@ -71,12 +75,19 @@ test.beforeAll(async () => {
   expect(new Set(f3.map((s) => s.familyId)).size, 'siblings share one family').toBe(1);
   f1 = await addStudent(owner, { name: personName('Single'), classId: school.classes[0].id, fatherName: personName('Dad'), fatherMobile: familyMobile() });
   f0 = await addStudent(owner, { name: personName('Nomobile'), classId: school.classes[1].id, fatherName: personName('Papa'), fatherMobile: familyMobile() });
+  const rFather = personName('Rupee');
+  const rMobile = familyMobile();
+  fR = [
+    await addStudent(owner, { name: personName('Paisa'), classId: school.classes[0].id, fatherName: rFather, fatherMobile: rMobile }),
+    await addStudent(owner, { name: personName('Paisa'), classId: school.classes[1].id, fatherName: rFather, fatherMobile: rMobile }),
+  ];
+  expect(new Set(fR.map((s) => s.familyId)).size, 'R4 siblings share one family').toBe(1);
 
   await dbSetup('F0: no father/mother mobile (guardian mobile only)', `update "Families" set "FatherMobile" = '', "MotherMobile" = NULL, "GuardianMobile" = '03351234500' where "Id" = ${q(f0.familyId)}`);
   await dbSetup('F1: Urdu + HTML special characters in student and father names', `update "Students" set "Name" = ${q(URDU_STUDENT)} where "Id" = ${q(f1.id)}; update "Families" set "FatherName" = ${q(URDU_FATHER)} where "Id" = ${q(f1.familyId)}`);
 
   await createSchoolPolicy(owner, { tuition: TUITION });
-  for (const familyId of [f3[0].familyId, f1.familyId, f0.familyId]) {
+  for (const familyId of [f3[0].familyId, f1.familyId, f0.familyId, fR[0].familyId]) {
     await waitForChallans(owner.tenantId, 1, `c."FamilyId" = ${q(familyId)}`);
   }
 });
@@ -291,18 +302,32 @@ test('edge: Urdu / HTML special characters are encoded in the PDF and sent as pl
   expect(bodyParam(row, 'amount')).toBe('Rs. 300');
 });
 
-test('R4: a fractional amount (250.75) is not rounded away on the receipt or in the message', async ({ page }) => {
-  test.fail(true, 'R4 still open: FormatAmount and the PDF N() still use N0, so 250.75 becomes Rs. 251 / PKR 251');
-  const receipt = await payOk(f1.familyId, 250.75);
-  const row = await waitReceiptProcessed(owner.tenantId, receipt.paymentId);
-  console.log(`[fraction] api totalPaid=${receipt.totalPaid} message amount=${bodyParam(row, 'amount')}`);
-  await page.setContent(await receiptDocumentHtml(row));
-  const text = (await page.locator('.fee-receipt-pdf').innerText()).replace(/\s+/g, ' ');
-  console.log(`[fraction] pdf total: ${text.match(/Total paid PKR [\d,.]+/)?.[0]}`);
-  await page.screenshot({ path: evidencePath('edge-fraction-receipt.png'), fullPage: true });
-  expect(receipt.totalPaid).toBe(250.75);
-  expect(bodyParam(row, 'amount')).toMatch(/250\.75/);
-  expect(text).toMatch(/Total paid PKR 250\.75/);
+test('R4: fee-receipt amounts show whole rupees in the WhatsApp message and the PDF (AwayFromZero)', async ({ page }) => {
+  // FeeAmount.Format: MidpointRounding.AwayFromZero to N0 (250.75 → 251, 1,250.75 → 1,251). Whole rupees stay as they are.
+  const cases: { amount: number; formatted: string; shot: string }[] = [
+    { amount: 250.75, formatted: '251', shot: 'edge-fraction-250-75' },
+    { amount: 1250.75, formatted: '1,251', shot: 'edge-fraction-1250-75' },
+    { amount: 200, formatted: '200', shot: 'edge-whole-200' },
+  ];
+  const outstanding = await familyOutstanding(fR[0].familyId);
+  expect(outstanding, 'R4 family needs enough outstanding for all cases').toBeGreaterThanOrEqual(cases.reduce((s, c) => s + c.amount, 0));
+  for (const { amount, formatted, shot } of cases) {
+    const receipt = await payOk(fR[0].familyId, amount);
+    const row = await waitReceiptProcessed(owner.tenantId, receipt.paymentId);
+    const message = bodyParam(row, 'amount');
+    await page.setContent(await receiptDocumentHtml(row));
+    const text = (await page.locator('.fee-receipt-pdf').innerText()).replace(/\s+/g, ' ');
+    const pdfTotal = text.match(/Total paid PKR [\d,.]+/)?.[0];
+    console.log(`[R4] amount=${amount} api=${receipt.totalPaid} message=${message} pdf=${pdfTotal}`);
+    await page.screenshot({ path: evidencePath(`${shot}.png`), fullPage: true });
+    expect(receipt.totalPaid, `api ${amount}`).toBe(amount);
+    expect(message, `message ${amount}`).toBe(`Rs. ${formatted}`);
+    expect(pdfTotal, `pdf ${amount}`).toBe(`Total paid PKR ${formatted}`);
+    if (amount === Math.trunc(amount)) {
+      expect(message).not.toMatch(/\.00$/);
+      expect(pdfTotal).not.toMatch(/\.00$/);
+    }
+  }
 });
 
 test('AC5 logo: an external or missing campus logo URL is omitted from the receipt (never fetched), the receipt is still sent', async ({ page }) => {
@@ -360,14 +385,14 @@ test('AC4: with every allocation used up, the receipt is Skipped QuotaExhausted,
   await saveEvidence('ac4-backoffice-customer-detail.json', JSON.stringify(detail, null, 2));
 });
 
-test('R5 (pre-existing): GET fee-payments/payments/{malformed id}/receipt answers 400/404, not 500', async () => {
-  test.fail(true, 'R5 open: GetFeePaymentReceipt turns a non-GUID id into a FormatException → 500 (also on main)');
+test('R5: GET fee-payments/payments/{id}/receipt answers 404 for a random GUID, a non-GUID, %20 and a long id', async () => {
   const statuses: Record<string, number> = {};
   for (const id of [randomUUID(), 'not-a-guid', '%20', 'a'.repeat(300)]) {
     statuses[id.slice(0, 20)] = (await owner.api.get(`fee-payments/payments/${encodeURIComponent(id)}/receipt`)).status();
   }
   console.log(`[R5] ${JSON.stringify(statuses)}`);
-  for (const [id, status] of Object.entries(statuses)) expect(status, `GET receipt ${id}`).toBeLessThan(500);
+  await saveEvidence('r5-receipt-status.json', JSON.stringify(statuses, null, 2));
+  for (const [id, status] of Object.entries(statuses)) expect(status, `GET receipt ${id}`).toBe(404);
 });
 
 test('R1 (AC5): the default template name is fee_payment_receipt, and a sent receipt uses that name (empty names wait — unit + live probe)', async () => {

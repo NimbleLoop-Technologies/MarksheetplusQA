@@ -1,5 +1,5 @@
 /**
- * Short cycle-2 close-out: WebApp receipt page/print paper + R5 (pre-existing 500).
+ * Short close-out: WebApp receipt page/print paper + R5 (malformed payment id → 404).
  * Self-seeding; does not need WhatsApp credits (the receipt page is independent of the send).
  */
 import { test, expect, type Page } from '@playwright/test';
@@ -48,15 +48,14 @@ test.afterAll(async () => {
   await owner?.api.dispose();
 });
 
-test('R5 (pre-existing): GET fee-payments/payments/{malformed id}/receipt answers 400/404, not 500', async () => {
-  test.fail(true, 'R5 open: GetFeePaymentReceipt turns a non-GUID id into a FormatException → 500 (also on main)');
+test('R5: GET fee-payments/payments/{id}/receipt answers 404 for a random GUID, a non-GUID, %20 and a long id', async () => {
   const statuses: Record<string, number> = {};
   for (const id of [randomUUID(), 'not-a-guid', '%20', 'a'.repeat(300)]) {
     statuses[id.slice(0, 20)] = (await owner.api.get(`fee-payments/payments/${encodeURIComponent(id)}/receipt`)).status();
   }
   console.log(`[R5] ${JSON.stringify(statuses)}`);
   await saveEvidence('r5-receipt-status.json', JSON.stringify(statuses, null, 2));
-  for (const [id, status] of Object.entries(statuses)) expect(status, `GET receipt ${id}`).toBeLessThan(500);
+  for (const [id, status] of Object.entries(statuses)) expect(status, `GET receipt ${id}`).toBe(404);
 });
 
 test('AC1: the WebApp receipt page and its print paper show the same receipt', async ({ browser }) => {

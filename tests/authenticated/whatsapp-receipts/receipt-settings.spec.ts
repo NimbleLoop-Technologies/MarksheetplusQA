@@ -102,17 +102,34 @@ test('AC3: legacy pre-opt-in documents ({DisabledKinds: []} / {DisabledKinds: [1
   }
 });
 
-test('R2: a client that does not know Fee receipt (PUT disabledKinds=[1], the pre-PR page body) must not switch Fee receipt ON @smoke', async () => {
-  test.fail(true, 'R2 open: UpdateNotificationPreferences stores the complement of DisabledKinds');
+test('R2: a client that does not know Fee receipt (PUT disabledKinds=[1], no knownKinds) must not switch Fee receipt ON @smoke', async () => {
   // State before: an existing campus with Result + Dues ON and Fee receipt OFF.
   await replacePreference({ EnabledKinds: [WA_KIND.ResultPublished, WA_KIND.PendingDues] });
   // A Campus Settings page loaded before the deploy (two toggles) sends every OFF toggle; the user switches Result OFF.
   const put = await owner.api.put('campus/notification-preferences', { data: { disabledKinds: [WA_KIND.ResultPublished] } });
   expect(put.status()).toBe(200);
   const doc = await quotaDb.notificationPreference(owner.tenantId);
-  console.log(`[R2] stored after PUT disabledKinds=[1]: ${JSON.stringify(doc?.EnabledKinds)}`);
-  // Correct: the user never touched Fee receipt, so it stays OFF (no paid credits spent without consent).
-  expect((await enabledOf())[WA_KIND.FeePaymentReceipt], 'Fee receipt silently switched ON').toBe(false);
+  console.log(`[R2] stored after PUT disabledKinds=[1] (no knownKinds): ${JSON.stringify(doc?.EnabledKinds)}`);
+  const enabled = await enabledOf();
+  expect(enabled[WA_KIND.FeePaymentReceipt], 'Fee receipt silently switched ON').toBe(false);
+  expect(enabled[WA_KIND.ResultPublished], 'Result should be OFF').toBe(false);
+  expect(enabled[WA_KIND.PendingDues], 'Dues should stay ON').toBe(true);
+});
+
+test('R2: the new client (knownKinds = all metered kinds) can toggle every kind, including Fee receipt', async () => {
+  const all = [WA_KIND.ResultPublished, WA_KIND.FeePaymentReceipt, WA_KIND.PendingDues];
+  await replacePreference({ EnabledKinds: [WA_KIND.ResultPublished, WA_KIND.PendingDues] });
+  // Full-list path: current page sends knownKinds for every toggle it shows. Turn Result OFF and Fee receipt ON in one save.
+  const on = await owner.api.put('campus/notification-preferences', {
+    data: { disabledKinds: [WA_KIND.ResultPublished], knownKinds: all },
+  });
+  expect(on.status()).toBe(200);
+  expect(await enabledOf()).toEqual({ [WA_KIND.ResultPublished]: false, [WA_KIND.FeePaymentReceipt]: true, [WA_KIND.PendingDues]: true });
+  const off = await owner.api.put('campus/notification-preferences', {
+    data: { disabledKinds: [WA_KIND.ResultPublished, WA_KIND.FeePaymentReceipt, WA_KIND.PendingDues], knownKinds: all },
+  });
+  expect(off.status()).toBe(200);
+  expect(Object.values(await enabledOf()).every((e) => !e)).toBe(true);
 });
 
 test('AC3: switching Fee receipt ON in the UI saves EnabledKinds with 6 only and survives a reload; OFF again removes it', async () => {

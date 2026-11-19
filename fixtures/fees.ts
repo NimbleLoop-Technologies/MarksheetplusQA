@@ -602,6 +602,26 @@ export async function waitReceiptProcessed(tenantId: string, paymentId: string, 
 export const bodyParam = (row: ReceiptRow, name: string) => row.message?.BodyParameters.find((p) => p.Name === name)?.Value;
 
 /** Server receipt HTML (FeePaymentReceiptPdfBuilder.Build). After PR 555's comment-resolve, the queued row stores FeeReceipt data, not Document HTML. */
+/** Last MarksheetPlus checkout the render-fee-receipt tool was built against in this process. */
+let renderToolBuiltFor: string | undefined;
+
+function ensureRenderTool(mpDir: string, project: string): Promise<void> {
+  if (renderToolBuiltFor === mpDir) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const child = spawn('dotnet', ['build', project, '--nologo', `-p:MPDir=${mpDir}`], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const err: Buffer[] = [];
+    child.stderr.on('data', (d) => err.push(d));
+    child.stdout.on('data', (d) => err.push(d));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        renderToolBuiltFor = mpDir;
+        resolve();
+      } else reject(new Error(`render-fee-receipt build exit ${code}: ${Buffer.concat(err).toString('utf8').slice(-800)}`));
+    });
+  });
+}
+
 export async function receiptDocumentHtml(row: ReceiptRow): Promise<string> {
   const cached = row.message?.Document?.Html;
   if (cached) return cached;
@@ -609,6 +629,7 @@ export async function receiptDocumentHtml(row: ReceiptRow): Promise<string> {
   const project = path.join(__dirname, '..', 'tools/render-fee-receipt/render-fee-receipt.csproj');
   const mpDir = process.env.QA_CI_MP_DIR;
   if (!mpDir) throw new Error('receiptDocumentHtml: QA_CI_MP_DIR is not set (path to the MarksheetPlus checkout)');
+  await ensureRenderTool(mpDir, project);
   return new Promise((resolve, reject) => {
     const child = spawn('dotnet', ['run', '--project', project, '--no-build', `-p:MPDir=${mpDir}`], { stdio: ['pipe', 'pipe', 'pipe'] });
     const out: Buffer[] = [];
