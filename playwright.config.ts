@@ -3,6 +3,9 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 
 dotenv.config({ path: path.resolve(__dirname, '.env') });
+// One id per `playwright test` invocation (set in the runner, inherited by workers): fixtures/payroll.ts caches each
+// payroll spec file's throwaway owner under it, so a worker restart after a failure reuses the same tenant.
+process.env.QA_PAYROLL_RUN ??= `${Date.now()}`;
 
 const baseURL = process.env.QA_BASE_URL ?? 'https://qa-integration.marksheetplus.com';
 const familyURL = process.env.QA_FAMILY_URL ?? 'https://family-integration.marksheetplus.com';
@@ -49,9 +52,9 @@ export default defineConfig({
     {
       name: 'authenticated',
       testDir: './tests/authenticated',
-      // shell-notes and whatsapp-quota have their own projects (whatsapp-quota self-seeds; no .auth/user.json).
+      // shell-notes, payroll and whatsapp-quota have their own projects (whatsapp-quota self-seeds; no .auth/user.json).
       // attendance-backdating and challan-name need the local stack's Postgres and run serially (projects below).
-      testIgnore: [/shell-notes\//, /whatsapp-quota\//, /attendance-backdating\//, /challan-name\//],
+      testIgnore: [/shell-notes\//, /payroll\//, /whatsapp-quota\//, /attendance-backdating\//, /challan-name\//],
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
@@ -70,6 +73,16 @@ export default defineConfig({
         storageState: path.join(__dirname, '.auth', 'user.json'),
       },
       dependencies: ['setup'],
+    },
+    {
+      // PR 544 Generate & Publish Payroll (10 stories). Every spec file self-seeds a throwaway campus
+      // owner (local stack only): a tenant has one run per month and only the current month.
+      name: 'payroll',
+      testDir: './tests/authenticated/payroll',
+      retries: 0,
+      fullyParallel: false,
+      timeout: 3 * 60_000,
+      use: { ...devices['Desktop Chrome'] },
     },
     {
       // PR 538 WhatsApp quota. Self-seeding: each spec registers a throwaway owner + campus via the
