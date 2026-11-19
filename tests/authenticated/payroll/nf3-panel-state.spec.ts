@@ -98,6 +98,11 @@ test.describe('NF3 — the open row panel survives a search landing', () => {
 
   test('NF3-ONE-OFF-TYPED: a half-filled one-off form keeps its values while a search lands, and submitting it right after saves once', async ({ browser }) => {
     const s = w.data.spares[3];
+    // spares[3] is also used by FAILED-SAVE (fullyParallel, shared world), which leaves it with unpaid days: start from 0 and
+    // compare against the server's own net instead of the bare salary.
+    await reset(s);
+    await expect.poll(async () => (await P.rowFor(w.owner.api, w.data.runId, s)).unpaidDays, { timeout: 20_000 }).toBe(0);
+    const netBefore = (await P.rowFor(w.owner.api, w.data.runId, s)).net ?? 0;
     const page = await P.openApp(browser, w, P.runPath(w.data.runId), desktop);
     const run = await openDraft(page);
     await run.searchFor(s.name);
@@ -117,12 +122,14 @@ test.describe('NF3 — the open row panel survives a search landing', () => {
     await run.oneOffSubmit().click();
     await expect(run.oneOffField('Amount (PKR)')).toHaveCount(0, { timeout: 15_000 });
     const lines = (await P.figures(w.owner.api, w.data.runId, (await P.rowFor(w.owner.api, w.data.runId, s)).id)).lines.filter((l) => l.label === 'NF3 bonus');
-    await P.saveEvidence('nf3-one-off-typed.txt', JSON.stringify({ valuesAfterSearch: values, posts, savedLines: lines.length, net: (await P.rowFor(w.owner.api, w.data.runId, s)).net }, null, 2));
+    await P.saveEvidence('nf3-one-off-typed.txt', JSON.stringify({ valuesAfterSearch: values, posts, savedLines: lines.length, netBefore, net: (await P.rowFor(w.owner.api, w.data.runId, s)).net }, null, 2));
     expect(values).toEqual({ label: 'NF3 bonus', amount: '700', reason: 'nf3 retest', incentive: true });
     expect(posts, 'one POST, answered 2xx').toHaveLength(1);
     expect(posts[0]).toBeGreaterThanOrEqual(200); expect(posts[0]).toBeLessThan(300);
     expect(lines).toHaveLength(1);
-    await expect(run.panelNet()).toHaveText(P.moneyRe(s.salary + 700));
+    const netAfter = (await P.rowFor(w.owner.api, w.data.runId, s)).net ?? 0;
+    expect(netAfter, 'net = net before + the 700 incentive').toBe(netBefore + 700);
+    await expect(run.panelNet()).toHaveText(P.moneyRe(netAfter));
     await page.context().close();
   });
 
