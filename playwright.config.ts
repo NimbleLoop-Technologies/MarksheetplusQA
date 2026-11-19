@@ -52,9 +52,9 @@ export default defineConfig({
     {
       name: 'authenticated',
       testDir: './tests/authenticated',
-      // shell-notes, payroll and whatsapp-quota have their own projects (whatsapp-quota self-seeds; no .auth/user.json).
+      // shell-notes, payroll, ui-migration, whatsapp-quota and whatsapp-receipts have their own projects (quota/receipts self-seed; no .auth/user.json).
       // attendance-backdating and challan-name need the local stack's Postgres and run serially (projects below).
-      testIgnore: [/shell-notes\//, /payroll\//, /ui-migration\//, /whatsapp-quota\//, /attendance-backdating\//, /challan-name\//],
+      testIgnore: [/shell-notes\//, /payroll\//, /ui-migration\//, /whatsapp-quota\//, /whatsapp-receipts\//, /attendance-backdating\//, /challan-name\//],
       use: {
         ...devices['Desktop Chrome'],
         storageState: path.join(__dirname, '.auth', 'user.json'),
@@ -104,6 +104,19 @@ export default defineConfig({
       fullyParallel: false,
       retries: 0,
       timeout: 10 * 60_000,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      // PR 555 WhatsApp fee receipts. Self-seeding like whatsapp-quota (throwaway owner + campus per file,
+      // back-office operator from QA_BACKOFFICE_EMAIL/PASSWORD), plus fee data through the RestApi and psql
+      // (fixtures/fees.ts) and the Worker's fee scheduler. Local stack only. Run with --workers=1.
+      name: 'whatsapp-receipts',
+      testDir: './tests/authenticated/whatsapp-receipts',
+      // Live probe: only valid when the worker template name is cleared. Run explicitly with QA_EMPTY_TEMPLATE_PROBE=1.
+      testIgnore: /empty-template-probe/,
+      fullyParallel: false,
+      retries: 0,
+      timeout: 15 * 60_000,
       use: { ...devices['Desktop Chrome'] },
     },
     {

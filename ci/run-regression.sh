@@ -82,7 +82,7 @@ teardown() {
 if $DOWN_ONLY; then teardown; exit 0; fi
 
 [[ -n "${QA_CI_MP_DIR:-}" ]] || die "--mp-dir is required" 2
-QA_CI_MP_DIR="$(cd "$QA_CI_MP_DIR" && pwd)"
+export QA_CI_MP_DIR="$(cd "$QA_CI_MP_DIR" && pwd)"
 SRC="$QA_CI_MP_DIR/src/MarksheetPlusCode"
 [[ -f "$SRC/MarksheetPlusCode.sln" ]] || die "$QA_CI_MP_DIR is not a MarksheetPlus checkout (no src/MarksheetPlusCode/MarksheetPlusCode.sln)" 2
 for t in docker dotnet node npm npx curl jq openssl; do command -v "$t" >/dev/null || die "'$t' is required on the runner" 2; done
@@ -326,6 +326,8 @@ has_feature() { # has_feature <project>
 		ui-migration) grep -rqsF "LastClassSection" "$SRC" --include=*.cs ;;
 		# PR 557 (Payments screen removed, CU-z94x8ed10y): the per-child next-cycle toggle on the Fees page.
 		family-fees) grep -rqsF "View coming next cycle" "$SRC" --include=*.razor ;;
+		# PR 555 (WhatsApp fee receipts, CU-z94x8e9yhj): the receipt notification kind this PR introduced.
+		whatsapp-receipts) grep -rqsF "FeePaymentReceivedEvent" "$SRC" --include=*.cs ;;
 		# PR 558 (Stock Movements log + CSV export, CU-86exmwjgc / CU-86extv6wg): the log's empty-filter copy.
 		bookshop) grep -rqsF "No stock movements match your filters." "$SRC" --include=*.razor ;;
 		*) return 0 ;;
@@ -334,7 +336,7 @@ has_feature() { # has_feature <project>
 if [[ "$QA_CI_SUITES" == auto ]]; then
 	SUITES=()
 	# challan-name waits on the 1-minute fee scheduler (~12 min per file) and must run at --workers=1.
-	for p in setup anonymous authenticated shell-notes whatsapp-quota challan-name attendance-backdating payroll ui-migration family-fees bookshop family-setup family; do
+	for p in setup anonymous authenticated shell-notes whatsapp-quota whatsapp-receipts challan-name attendance-backdating payroll ui-migration family-fees bookshop family-setup family; do
 		if has_feature "$p"; then SUITES+=("$p"); else warn "skipping project $p: this MarksheetPlus checkout does not contain its feature yet"; fi
 	done
 else

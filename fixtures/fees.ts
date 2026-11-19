@@ -1,6 +1,6 @@
 /**
- * PR 547 (ClickUp z94x8eapp5) "challans under family or student name" helpers. Local stack only
- * (netns qa555): API seeding through the owner's RestApi bearer, Postgres reads/writes through psql.
+ * Fee helpers used by challan-name (PR 547, main) and WhatsApp fee receipts (PR 555, qa/pr-555).
+ * Local stack only: API seeding through the owner's RestApi bearer, Postgres via psql, Mongo via fixtures/quota.ts.
  *
  *  - setupSchool():      session + N classes (one section each) on a fresh throwaway campus
  *  - addStudent():       quick-add; same father mobile => same Family (siblings)
@@ -12,13 +12,14 @@
  *
  * Every SQL statement that WRITES is marked "DB SETUP" and is logged to the test output.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomInt, randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, type APIRequestContext, type APIResponse } from '@playwright/test';
 import { cacheOwner, ownerFromCache, type CachedOwner, type CampusOwner } from './campus-owner';
+import { mongo, WA_KIND } from './quota';
 
 const run = promisify(execFile);
 
@@ -401,14 +402,14 @@ export async function pay(
   api: APIRequestContext,
   familyId: string,
   amount: number,
-  o: { challanId?: string; clientPaymentId?: string; waivers?: { challanLineId: string; reason: string }[] } = {},
+  o: { challanId?: string; clientPaymentId?: string; isOfflinePayment?: boolean; note?: string; waivers?: { challanLineId: string; reason: string }[] } = {},
 ): Promise<APIResponse> {
   const data: Record<string, unknown> = {
     clientPaymentId: o.clientPaymentId ?? randomUUID(),
     paymentDate: new Date().toISOString(),
     amountReceived: amount,
-    note: 'QA Auto challan-name',
-    isOfflinePayment: false,
+    note: o.note ?? 'QA Auto challan-name',
+    isOfflinePayment: o.isOfflinePayment ?? false,
     fineWaivers: o.waivers ?? [],
   };
   if (o.challanId !== undefined) data.challanId = o.challanId;
@@ -490,4 +491,158 @@ function safeJson(text: string): any {
   }
 }
 
-export { q as sqlQuote };
+export { q, q as sqlQuote };
+
+
+// ── PR 555 WhatsApp fee-receipt helpers ──────────────────────────────────────────────────────
+
+/** Σ RemainingAmount over the family's challan lines (fresh DB read) = what the family still owes. */
+export async function familyOutstanding(familyId: string): Promise<number> {
+  const rows = await sql(`select coalesce(sum(l."RemainingAmount"), 0) from "FeeChallanLines" l join "FeeChallans" c on c."Id" = l."FeeChallanId" where c."FamilyId" = ${q(familyId)}`);
+  return Number(rows[0][0]);
+}
+
+export interface PayOptions { clientPaymentId?: string; isOfflinePayment?: boolean; note?: string; waivers?: { challanLineId: string; reason: string }[] }
+
+export function payBody(amount: number, o: PayOptions = {}) {
+  return {
+    clientPaymentId: o.clientPaymentId ?? randomUUID(),
+    paymentDate: new Date().toISOString(),
+    amountReceived: amount,
+    note: o.note ?? 'QA Auto receipt',
+    isOfflinePayment: o.isOfflinePayment ?? false,
+    fineWaivers: o.waivers ?? [],
+  };
+}
+
+export async function getReceipt(api: APIRequestContext, paymentId: string): Promise<any> {
+  return ok(await api.get(`fee-payments/payments/${encodeURIComponent(paymentId)}/receipt`), `GET receipt ${paymentId}`);
+}
+
+export interface OutboxRow { id: string; processedOn: string; attempts: number; payload: any }
+
+/** FeePaymentReceivedEvent outbox rows for one payment. PaymentId is at the top of the event contract (PR 555 cycle 2). */
+export async function receiptOutbox(paymentId: string): Promise<OutboxRow[]> {
+  const rows = await sql(`
+    select "Id", coalesce("ProcessedOn"::text, ''), "Attempts", "PayloadJson"::text from "OutboxMessages"
+    where "EventType" = 'FeePaymentReceivedEvent' and "PayloadJson"->>'PaymentId' = ${q(paymentId)}`);
+  return rows.map((r) => ({ id: r[0], processedOn: r[1], attempts: Number(r[2]), payload: JSON.parse(r[3]) }));
+}
+
+/** Waits until the relay published the payment's receipt event (ProcessedOn set). */
+export async function waitOutboxProcessed(paymentId: string, timeout = 120_000): Promise<OutboxRow> {
+  let row: OutboxRow | undefined;
+  await expect
+    .poll(async () => (row = (await receiptOutbox(paymentId))[0])?.processedOn ?? '', { message: `receipt outbox for ${paymentId} never relayed`, timeout, intervals: [2_000, 5_000] })
+    .not.toBe('');
+  return row!;
+}
+
+export async function paymentsByClientId(tenantId: string, clientPaymentId: string): Promise<string[]> {
+  return (await sql(`select "Id" from "FeePayments" where "TenantId" = ${q(tenantId)} and "ClientPaymentId" = ${q(clientPaymentId)}`)).map((r) => r[0]);
+}
+
+export interface ReceiptRow {
+  _id: string;
+  Kind: number;
+  DedupeKey: string;
+  RecipientReference: string;
+  TenantId: string;
+  Status: number;
+  SkipReason: string | null;
+  QuotaAllocationId: string | null;
+  AttemptCount: number;
+  LastError: string | null;
+  SentToNumber: string | null;
+  /** Parsed MessageJson (WhatsAppTemplateMessage). */
+  message: {
+    ToPhoneNumber: string;
+    TemplateName: string;
+    LanguageCode: string;
+    BodyParameters: { Name: string; Value: string }[];
+    Document: { Html: string; FileName: string } | null;
+    FeeReceipt: unknown;
+    RecipientContext: string;
+  } | null;
+}
+
+export const receiptDedupeKey = (tenantId: string, paymentId: string) => `fee-receipt:${tenantId}:${paymentId}`;
+
+/** Every FeePaymentReceipt row of a tenant (newest last). */
+export async function receiptRows(tenantId: string): Promise<ReceiptRow[]> {
+  const out = await mongo(`print(EJSON.stringify(db.scheduledwhatsappmessages.find({TenantId: ${JSON.stringify(tenantId)}, Kind: ${WA_KIND.FeePaymentReceipt}}).sort({_id: 1}).toArray(), {relaxed: true}))`);
+  const docs = JSON.parse(out) as any[];
+  return docs.map((d) => ({
+    ...d,
+    _id: typeof d._id === 'object' && d._id?.$oid ? d._id.$oid : String(d._id),
+    message: d.MessageJson ? JSON.parse(d.MessageJson) : null,
+  }));
+}
+
+export async function receiptRow(tenantId: string, paymentId: string): Promise<ReceiptRow | undefined> {
+  return (await receiptRows(tenantId)).find((r) => r.DedupeKey === receiptDedupeKey(tenantId, paymentId));
+}
+
+/** Waits until the payment's receipt row exists. */
+export async function waitReceiptRow(tenantId: string, paymentId: string, timeout = 120_000): Promise<ReceiptRow> {
+  let row: ReceiptRow | undefined;
+  await expect.poll(async () => !!(row = await receiptRow(tenantId, paymentId)), { message: `no receipt row for ${paymentId}`, timeout, intervals: [2_000, 5_000] }).toBe(true);
+  return row!;
+}
+
+/** Waits until the worker moves the payment's receipt row out of Pending/Sending (Sent, Skipped or Failed). */
+export async function waitReceiptProcessed(tenantId: string, paymentId: string, timeout = 5 * 60_000): Promise<ReceiptRow> {
+  let row: ReceiptRow | undefined;
+  await expect
+    .poll(async () => (row = await receiptRow(tenantId, paymentId))?.Status ?? -1, { message: `receipt row for ${paymentId} never processed`, timeout, intervals: [3_000, 5_000, 10_000] })
+    .toBeGreaterThanOrEqual(2);
+  return row!;
+}
+
+export const bodyParam = (row: ReceiptRow, name: string) => row.message?.BodyParameters.find((p) => p.Name === name)?.Value;
+
+/** Server receipt HTML (FeePaymentReceiptPdfBuilder.Build). After PR 555's comment-resolve, the queued row stores FeeReceipt data, not Document HTML. */
+/** Last MarksheetPlus checkout the render-fee-receipt tool was built against in this process. */
+let renderToolBuiltFor: string | undefined;
+
+function ensureRenderTool(mpDir: string, project: string): Promise<void> {
+  if (renderToolBuiltFor === mpDir) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const child = spawn('dotnet', ['build', project, '--nologo', `-p:MPDir=${mpDir}`], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const err: Buffer[] = [];
+    child.stderr.on('data', (d) => err.push(d));
+    child.stdout.on('data', (d) => err.push(d));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        renderToolBuiltFor = mpDir;
+        resolve();
+      } else reject(new Error(`render-fee-receipt build exit ${code}: ${Buffer.concat(err).toString('utf8').slice(-800)}`));
+    });
+  });
+}
+
+export async function receiptDocumentHtml(row: ReceiptRow): Promise<string> {
+  const cached = row.message?.Document?.Html;
+  if (cached) return cached;
+  if (!row.message?.FeeReceipt) throw new Error(`receipt row ${row._id} has no Document.Html or FeeReceipt to render`);
+  const project = path.join(__dirname, '..', 'tools/render-fee-receipt/render-fee-receipt.csproj');
+  const mpDir = process.env.QA_CI_MP_DIR;
+  if (!mpDir) throw new Error('receiptDocumentHtml: QA_CI_MP_DIR is not set (path to the MarksheetPlus checkout)');
+  await ensureRenderTool(mpDir, project);
+  return new Promise((resolve, reject) => {
+    const child = spawn('dotnet', ['run', '--project', project, '--no-build', `-p:MPDir=${mpDir}`], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    child.stdout.on('data', (d) => out.push(d));
+    child.stderr.on('data', (d) => err.push(d));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      const stdout = Buffer.concat(out).toString('utf8');
+      const stderr = Buffer.concat(err).toString('utf8');
+      if (code === 0 && stdout.includes('fee-receipt-pdf')) resolve(stdout);
+      else reject(new Error(`render-fee-receipt exit ${code}: ${stderr || stdout.slice(0, 500)}`));
+    });
+    child.stdin.end(JSON.stringify(row.message));
+  });
+}
