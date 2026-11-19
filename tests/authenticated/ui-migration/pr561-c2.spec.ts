@@ -2,8 +2,8 @@
  * PR 561 cycle 2 (head d495973e): Dan's follow-ups on the CU-86ey2erpk QA subtasks.
  * - eber8 #2 / C1-STRIKE-OFF-STALE: Students.LastSectionId is written in the strike-off transaction, so the last class shows at once
  *   (profile header, Basic card "Last class"/"Last section", Admission Register row and class filter); re-admission clears it.
- * - ebrbk #3 / library #40: date of birth has no age limit, only future dates are refused (client and server); the calendar opens on
- *   the current month with pickable days.
+ * - ebrbk #3 / library #40: date of birth lies between today − 100 years and today, both included (client and server, students and
+ *   staff, dc0674b5); the calendar opens on the current month with pickable days.
  * - TailwindUi.Blazor 2026.11.19.43: #39 (a dropdown item fires once per gesture: eb5wf archive class, eber8 #1, ebrbk #1/#2, ed105)
  *   and #42 (eberb: tooltips on truncated rail labels, badge descriptions).
  * Runs as the seeded CI owner; every test makes its own class / student / staff.
@@ -160,24 +160,34 @@ test.describe('PR 561 c2 — z94x8eber8 #2 last class written with the strike-of
   });
 });
 
-// ── ebrbk #3 / library #40: date of birth ───────────────────────────────────────────────────────────────────────
-test.describe('PR 561 c2 — date of birth: only future dates refused', () => {
-  test('C2-DOB-API: quick-add and add staff accept today and a young age, refuse tomorrow with "cannot be in the future" @smoke', async () => {
+// ── ebrbk #3: date of birth between today − 100 years and today (dc0674b5, fa781d3b) ───────────────────────────
+// Umair's rule: not in the future, not more than 100 years back; both ends included.
+const centuryBack = (extraDays = 0) => {
+  const [y, m, d] = karachiIso().split('-').map(Number);
+  const t = new Date(Date.UTC(y - 100, m - 1, d));
+  if (t.getUTCMonth() !== m - 1) t.setUTCDate(0); // 29 Feb → 28 Feb, like DateTime.AddYears
+  t.setUTCDate(t.getUTCDate() - extraDays);
+  return t.toISOString().slice(0, 10);
+};
+const FUTURE = 'Date of birth cannot be in the future.';
+const TOO_OLD = 'Date of birth cannot be more than 100 years ago.';
+
+test.describe('PR 561 c2 — date of birth: today − 100 years … today', () => {
+  test('C2-DOB-API: students and staff accept today and exactly 100 years back; tomorrow and 100 years + 1 day get a clear 400 @smoke', async () => {
     const api = await ownerApi();
     const cls = await createClass(api, '8');
-    for (const iso of [karachiIso(), karachiIso(-365 * 3)]) {
+    for (const iso of [karachiIso(), centuryBack()]) {
       const r = await quickAdd(api, cls.id, iso);
       expect(r.status, `quick-add DOB ${iso}: ${r.body}`).toBe(201);
     }
-    const tomorrow = await quickAdd(api, cls.id, karachiIso(1));
-    expect(tomorrow.status, tomorrow.body).toBe(400);
-    expect(tomorrow.body).toContain('Date of birth cannot be in the future.');
-    // Staff: no 18-year minimum any more.
-    const young = await addStaff(api, { salary: 30_000, dob: karachiIso(-365 * 10) });
-    expect(young.id).toBeTruthy();
-    const todayStaff = await addStaff(api, { salary: 30_000, dob: karachiIso() });
-    expect(todayStaff.id).toBeTruthy();
+    for (const [iso, msg] of [[karachiIso(1), FUTURE], [centuryBack(1), TOO_OLD]] as const) {
+      const r = await quickAdd(api, cls.id, iso);
+      expect(r.status, `quick-add DOB ${iso}: ${r.body}`).toBe(400);
+      expect(r.body).toContain(msg);
+    }
+    for (const iso of [karachiIso(), centuryBack()]) expect((await addStaff(api, { salary: 30_000, dob: iso })).id, `staff DOB ${iso}`).toBeTruthy();
     await expect(addStaff(api, { salary: 30_000, dob: karachiIso(1) })).rejects.toThrow(/400.*Date of birth cannot be in the future/s);
+    await expect(addStaff(api, { salary: 30_000, dob: centuryBack(1) })).rejects.toThrow(/400.*Date of birth cannot be more than 100 years ago/s);
     await api.dispose();
   });
 
@@ -199,27 +209,54 @@ test.describe('PR 561 c2 — date of birth: only future dates refused', () => {
     await expect(page.locator('#add-staff-date-of-birth')).toHaveValue(ddMmmYyyy(first));
   });
 
-  test('C2-DOB-STUDENT-PROFILE: typing tomorrow is refused on the student profile, today is accepted', async ({ page }) => {
+  // Form: typing a date outside the range marks the field invalid and keeps Save disabled; both limits save.
+  async function formLimits(page: Page, dobId: string, saveSel: string, saved: () => Promise<string>, tag: string, prep?: () => Promise<void>) {
+    const dob = page.locator(`#${dobId}`);
+    const save = page.locator(saveSel);
+    for (const [iso, error] of [[karachiIso(1), `Choose a date on or before ${ddMmmYyyy(karachiIso())}.`], [centuryBack(1), `Choose a date on or after ${ddMmmYyyy(centuryBack())}.`]]) {
+      await page.reload();
+      await expect(dob).toBeVisible({ timeout: 20_000 });
+      await dob.fill(ddMmmYyyy(iso));
+      await dob.press('Tab');
+      await expect(dob, `${tag} DOB ${iso}`).toHaveAttribute('aria-invalid', 'true');
+      await expect(page.locator(`#${dobId}-error`)).toHaveText(error);
+      await expect(save).toBeDisabled();
+      expect(await saved(), `${tag}: ${iso} must not be saved`).not.toBe(iso);
+      await shot(page, `dob-${tag}-${iso}`);
+    }
+    for (const iso of [centuryBack(), karachiIso()]) {
+      await page.reload();
+      await expect(dob).toBeVisible({ timeout: 20_000 });
+      await dob.fill(ddMmmYyyy(iso));
+      await dob.press('Tab');
+      await expect(dob).not.toHaveAttribute('aria-invalid', 'true');
+      if (prep) await prep();
+      await save.click();
+      await expect.poll(saved, { timeout: 15_000, message: `${tag} DOB ${iso} saves` }).toBe(iso);
+    }
+  }
+
+  test('C2-DOB-STUDENT-PROFILE: tomorrow and 100 years + 1 day are refused on the student profile; today and exactly 100 years back save', async ({ page }) => {
     const api = await ownerApi();
     const cls = await createClass(api, '8');
     const pupil = await quickAddStudent(api, cls.id);
     await page.goto(`/registrar/students/${pupil.id}`);
-    const dob = page.locator('#profile-basic-dob');
-    await expect(dob).toBeVisible({ timeout: 20_000 });
-    await dob.fill(ddMmmYyyy(karachiIso(1)));
-    await dob.press('Tab');
-    await expect(dob).toHaveAttribute('aria-invalid', 'true');
-    await expect(page.locator('#profile-basic-dob-error')).toHaveText(`Choose a date on or before ${ddMmmYyyy(karachiIso())}.`);
-    await expect(page.locator('[data-action="save-basic"]')).toBeDisabled();
-    const p1 = await profile(api, pupil.id);
-    expect(String(p1.dateOfBirth).slice(0, 10), 'tomorrow must not be saved').not.toBe(karachiIso(1));
-    await shot(page, 'dob-student-tomorrow');
-    await page.reload();
-    await expect(dob).toBeVisible({ timeout: 20_000 });
-    await dob.fill(ddMmmYyyy(karachiIso()));
-    await dob.press('Tab');
-    await page.locator('[data-action="save-basic"]').click();
-    await expect.poll(async () => String((await profile(api, pupil.id)).dateOfBirth).slice(0, 10), { timeout: 15_000 }).toBe(karachiIso());
+    await formLimits(page, 'profile-basic-dob', '[data-action="save-basic"]', async () => String((await profile(api, pupil.id)).dateOfBirth).slice(0, 10), 'student');
+    await api.dispose();
+  });
+
+  test('C2-DOB-STAFF-PROFILE: tomorrow and 100 years + 1 day are refused on the staff Basic card; today and exactly 100 years back save', async ({ page }) => {
+    const api = await ownerApi();
+    const staff = await addStaff(api, { salary: 30_000 });
+    const savedDob = async () => {
+      const r = await api.get(`staff/${staff.id}/profile`);
+      const b = await r.json();
+      return String(b.dateOfBirth ?? b.basicInfo?.dateOfBirth ?? b.basic?.dateOfBirth).slice(0, 10);
+    };
+    await page.goto(`/staff/register/${staff.id}`);
+    // The API-seeded staff member has no father's / spouse's name, which the Basic card requires before it saves.
+    const father = page.getByRole('textbox', { name: "Father's or spouse's name" });
+    await formLimits(page, 'staff-basic-dob', '[data-action="save"]', savedDob, 'staff', async () => { if (!(await father.inputValue())) await father.fill('Qa Father'); });
     await api.dispose();
   });
 });
