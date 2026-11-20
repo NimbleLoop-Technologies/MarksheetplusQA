@@ -437,80 +437,158 @@ test('PR549 C2 a Left staffer who still holds a role shows as a legacy row and c
   expect(serverErrors).toEqual([]);
 });
 
-test('PR549 C2 guard: the campus owner and the last Head Admin cannot be removed on any path; Remove hidden on those rows', async ({ page }) => {
-  const t = seed.tenantId;
-  const blocked = (body: string, msg: string) => expect(body).toContain(msg);
-  const log: Record<string, any> = {};
-  // A second Head Admin (bound by invite) acts, since the owner removing their own row hits the own-roles rule first.
-  const aPhone = mobile549(); const aEmail = `pr549-admin+${letters(6)}@testenv.local`;
-  const adminStaff = await addStaffWithContacts(owner, { first: 'Guardadmin', phone: aPhone, email: aEmail });
-  const adminAcc = await inviteAndAccept(owner, adminStaff.id, aEmail);
-  expect((await putStaffRoles(owner, adminStaff.id, [ROLE.headAdmin.id])).status()).toBe(200);
-  const admin = await campusApi(aPhone, adminAcc.password);
-  // Owner: give the creator an explicit Teacher row (as any assignment the owner might hold) -> refused, no Remove.
-  if (!(await assignmentsOf(t, seed.owner.userId)).length)
-    await sqlExec(`insert into "AccessRoleAssignments" ("Id","TenantId","UserId","AccessRoleId","SystemRoleName","Scope","CreatedDate","CreatedBy") values (gen_random_uuid(), ${q(t)}, ${q(seed.owner.userId)}, null, 'Teacher', 'Tenant', now(), 'System')`);
-  const ownerRow = (await roleMembers(admin, ROLE.teacher.id)).find(m => m.userId === seed.owner.userId);
-  log.ownerRow = ownerRow;
-  expect(ownerRow?.removeBlockedReason).toBe(OWNER_GUARD);
-  const ownerDel = await removeRoleAccount(admin, ROLE.teacher.id, seed.owner.userId);
-  log.ownerAccountRemove = { status: ownerDel.status(), body: await ownerDel.text() };
-  expect(ownerDel.status()).toBe(400); blocked(log.ownerAccountRemove.body, OWNER_GUARD);
-  const ownerSelf = await removeRoleAccount(owner, ROLE.teacher.id, seed.owner.userId);
-  log.ownerSelfRemove = { status: ownerSelf.status(), body: await ownerSelf.text() };
-  expect(ownerSelf.status()).toBe(400);
-  const creatorStaffDel = await admin.delete(`access-roles/${encodeURIComponent(ROLE.teacher.id)}/members/${seed.creatorStaff.staff.id}`);
-  log.ownerStaffRemove = { status: creatorStaffDel.status(), body: await creatorStaffDel.text() };
-  expect(creatorStaffDel.status(), 'creator staff path never 5xx').toBeLessThan(500);
-  expect((await assignmentsOf(t, seed.owner.userId)).map(a => a.SystemRoleName)).toEqual([ROLE.teacher.name]);
-  await admin.dispose();
-
-  // Down to one Head Admin holder, a legacy login (owner acts).
-  const holders = (await roleMembers(owner, ROLE.headAdmin.id)).filter(m => m.userId !== seed.owner.userId)
-    .sort((a, b) => Number(a.isLegacy) - Number(b.isLegacy));
-  for (const m of holders.slice(0, -1)) {
-    const r = m.staffId ? await owner.delete(`access-roles/${encodeURIComponent(ROLE.headAdmin.id)}/members/${m.staffId}`) : await removeRoleAccount(owner, ROLE.headAdmin.id, m.userId!);
-    expect(r.status(), `remove ${m.name}: ${await r.text()}`).toBeLessThan(300);
-  }
-  const lastLegacy = (await roleMembers(owner, ROLE.headAdmin.id));
-  expect(lastLegacy).toHaveLength(1);
-  expect(lastLegacy[0].isLegacy).toBe(true);
-  log.lastHolderRow = lastLegacy[0];
-  expect(lastLegacy[0].removeBlockedReason).toBe(LAST_HEAD_ADMIN_GUARD);
-  const accDel = await removeRoleAccount(owner, ROLE.headAdmin.id, lastLegacy[0].userId!);
-  log.lastAccountRemove = { status: accDel.status(), body: await accDel.text() };
-  expect(accDel.status()).toBe(400); blocked(log.lastAccountRemove.body, LAST_HEAD_ADMIN_GUARD);
-  log.ownerStillSignsInWithHeadAdmin = (await (await owner.get(`access-roles/${encodeURIComponent(ROLE.headAdmin.id)}`)).status());
-
-  // Hand Head Admin to the bound staffer, then drop the legacy login: the staffer is now the last holder.
-  const s1 = seed.uniquePhone.staff;
-  expect((await putStaffRoles(owner, s1.id, [ROLE.headAdmin.id])).status()).toBe(200);
-  expect((await removeRoleAccount(owner, ROLE.headAdmin.id, lastLegacy[0].userId!)).status()).toBe(204);
-  const staffDel = await owner.delete(`access-roles/${encodeURIComponent(ROLE.headAdmin.id)}/members/${s1.id}`);
-  log.lastStaffRemove = { status: staffDel.status(), body: await staffDel.text() };
-  expect(staffDel.status()).toBe(400); blocked(log.lastStaffRemove.body, LAST_HEAD_ADMIN_GUARD);
-  const untick = await putStaffRoles(owner, s1.id, [ROLE.teacher.id]);
-  log.lastRolesTabUntick = { status: untick.status(), body: await untick.text() };
-  expect(untick.status()).toBe(400); blocked(log.lastRolesTabUntick.body, LAST_HEAD_ADMIN_GUARD);
-
-  watch5xx(page);
-  await signInUi(page, { identifier: seed.owner.phone, password: seed.owner.password }, `${BASE}/setup/roles/${encodeURIComponent(ROLE.headAdmin.id)}`);
-  const row = page.locator('#role-members-table tr', { hasText: s1.name });
+const insertAssignment = (tenantId: string, userId: string, role: string) => sqlExec(`insert into "AccessRoleAssignments" ("Id","TenantId","UserId","AccessRoleId","SystemRoleName","Scope","CreatedDate","CreatedBy") values (gen_random_uuid(), ${q(tenantId)}, ${q(userId)}, null, ${q(role)}, 'Tenant', now(), 'System')`);
+const haMembersPath = (staffId: string) => `access-roles/${encodeURIComponent(ROLE.headAdmin.id)}/members/${staffId}`;
+async function invitedStaff(api: APIRequestContext, first: string) {
+  const phone = mobile549(); const email = `pr549-${first.toLowerCase()}+${letters(6)}@testenv.local`;
+  const staff = await addStaffWithContacts(api, { first, phone, email });
+  const acc = await inviteAndAccept(api, staff.id, email);
+  return { staff, phone, ...acc };
+}
+async function removeButton(page: Page, roleId: string, userId: string) {
+  await page.goto(`${BASE}/setup/roles/${encodeURIComponent(roleId)}`);
+  const row = page.locator(`#role-members-table [data-member="${userId}"]`).locator('xpath=ancestor::tr');
   await expect(row).toBeVisible({ timeout: 30_000 });
-  await expect(row.locator('[data-action="remove-member"]')).toHaveCount(0);
-  await page.screenshot({ path: shot('c2-guard-last-head-admin-row.png'), fullPage: true });
-  await page.goto(`${BASE}/setup/roles/${encodeURIComponent(ROLE.teacher.id)}`);
-  const orow = page.locator(`#role-members-table [data-member="${seed.owner.userId}"]`).locator('xpath=ancestor::tr');
-  await expect(orow).toBeVisible({ timeout: 30_000 });
-  await expect(orow.locator('[data-action="remove-member"]')).toHaveCount(0);
-  await page.screenshot({ path: shot('c2-guard-owner-row.png'), fullPage: true });
-  await page.goto(`${BASE}/staff/register/${s1.id}?tab=roles`);
+  return row.locator('[data-action="remove-member"]');
+}
+async function untickHeadAdminOnRolesTab(page: Page, staffId: string) {
+  await page.goto(`${BASE}/staff/register/${staffId}?tab=roles`);
   await expect(page.locator('[data-staff-card="roles"]')).toHaveAttribute('data-state', 'loaded', { timeout: 30_000 });
   await page.getByRole('button', { name: `Remove ${ROLE.headAdmin.name}` }).click();
-  await page.locator('[data-action="save-roles"]').click();
-  await expect(page.locator('[data-roles-error]')).toContainText(LAST_HEAD_ADMIN_GUARD, { timeout: 15_000 });
-  await page.screenshot({ path: shot('c2-guard-roles-tab-untick.png'), fullPage: true });
-  expect((await assignmentsOf(t, seed.uniquePhone.account.userId)).map(a => a.SystemRoleName)).toEqual([ROLE.headAdmin.name]);
-  evidence('c2-guard.json', log);
+}
+
+test('PR549 C3 guard with an owner: the only other Head Admin can be removed on every path (Remove shown); the owner\'s roles stay protected', async ({ page, browser }) => {
+  const t = seed.tenantId; const log: Record<string, any> = {};
+  const ha = (u: string) => assignmentsOf(t, u).then(a => a.filter(x => x.SystemRoleName === ROLE.headAdmin.name));
+
+  // (b) Owner: give the creator explicit Head Admin and Teacher rows; another Head Admin tries to remove them.
+  const ga = await invitedStaff(owner, 'Guardadmin');
+  expect((await putStaffRoles(owner, ga.staff.id, [ROLE.headAdmin.id])).status()).toBe(200);
+  const admin = await campusApi(ga.phone, ga.password);
+  if (!(await assignmentsOf(t, seed.owner.userId)).length) {
+    await insertAssignment(t, seed.owner.userId, 'Teacher');
+    await insertAssignment(t, seed.owner.userId, 'Head Admin');
+  }
+  for (const r of [ROLE.teacher, ROLE.headAdmin]) {
+    const row = (await roleMembers(admin, r.id)).find(m => m.userId === seed.owner.userId);
+    expect(row?.removeBlockedReason, `owner row on ${r.name}`).toBe(OWNER_GUARD);
+    const del = await removeRoleAccount(admin, r.id, seed.owner.userId);
+    log[`owner_${r.name}_remove`] = { status: del.status(), body: await del.text() };
+    expect(del.status()).toBe(400); expect(log[`owner_${r.name}_remove`].body).toContain(OWNER_GUARD);
+  }
+  const untickOwner = await putStaffRoles(admin, seed.creatorStaff.staff.id, [ROLE.teacher.id]);
+  log.owner_staff_roles_tab = { status: untickOwner.status(), body: await untickOwner.text() };
+  expect(untickOwner.status(), 'creator Roles tab').toBe(400);
+  const ownerSelf = await removeRoleAccount(owner, ROLE.headAdmin.id, seed.owner.userId);
+  log.owner_self_remove = { status: ownerSelf.status(), body: await ownerSelf.text() };
+  expect(ownerSelf.status()).toBe(400);
+  expect((await assignmentsOf(t, seed.owner.userId)).map(a => a.SystemRoleName).sort()).toEqual([ROLE.headAdmin.name, ROLE.teacher.name]);
+  await admin.dispose();
+  const gaCtx = await browser.newContext({ ignoreHTTPSErrors: true });
+  const gaPage = await gaCtx.newPage();
+  await signInUi(gaPage, { identifier: ga.phone, password: ga.password }, `${BASE}/setup/roles/${encodeURIComponent(ROLE.headAdmin.id)}`);
+  await expect(await removeButton(gaPage, ROLE.headAdmin.id, seed.owner.userId)).toHaveCount(0);
+  await gaPage.screenshot({ path: shot('c3-owner-row-no-remove.png'), fullPage: true });
+  await gaCtx.close();
+  watch5xx(page);
+  await sqlExec(`delete from "AccessRoleAssignments" where "TenantId" = ${q(t)} and "UserId" = ${q(seed.owner.userId)} and "SystemRoleName" = 'Head Admin'`);
+
+  // (a) Owner plus one other Head Admin, on each path in turn (owner acts).
+  const others = (await roleMembers(owner, ROLE.headAdmin.id)).filter(m => m.userId !== seed.owner.userId).sort((a, b) => Number(a.isLegacy) - Number(b.isLegacy));
+  expect(others.some(m => m.isLegacy), 'a legacy holder is left to test with').toBe(true);
+  for (const m of others.slice(0, -1)) {
+    const r = m.staffId ? await owner.delete(haMembersPath(m.staffId)) : await removeRoleAccount(owner, ROLE.headAdmin.id, m.userId!);
+    expect(r.status(), `remove ${m.name}: ${await r.text()}`).toBeLessThan(300);
+  }
+  const legacyLast = await roleMembers(owner, ROLE.headAdmin.id);
+  expect(legacyLast).toHaveLength(1); expect(legacyLast[0].isLegacy).toBe(true);
+  expect(legacyLast[0].removeBlockedReason, 'only other Head Admin (legacy) is removable').toBeNull();
+  log.legacy_only_other = legacyLast[0];
+  await signInUi(page, { identifier: seed.owner.phone, password: seed.owner.password }, `${BASE}/setup/roles/${encodeURIComponent(ROLE.headAdmin.id)}`);
+  await expect(await removeButton(page, ROLE.headAdmin.id, legacyLast[0].userId!)).toHaveCount(1);
+  await page.screenshot({ path: shot('c3-owner-plus-legacy-remove-shown.png'), fullPage: true });
+  await removeOnRolePage(page, ROLE.headAdmin.id, legacyLast[0].name);  // legacy-account path
+  expect(await ha(legacyLast[0].userId!)).toEqual([]);
+
+  const s1 = seed.uniquePhone.staff; const s1User = seed.uniquePhone.account.userId;
+  expect((await putStaffRoles(owner, s1.id, [ROLE.headAdmin.id])).status()).toBe(200);
+  const s1Row = (await roleMembers(owner, ROLE.headAdmin.id));
+  expect(s1Row.map(m => m.userId)).toEqual([s1User]);
+  expect(s1Row[0].removeBlockedReason).toBeNull();
+  await expect(await removeButton(page, ROLE.headAdmin.id, s1User)).toHaveCount(1);
+  await page.screenshot({ path: shot('c3-owner-plus-staff-remove-shown.png'), fullPage: true });
+  const staffDel = await owner.delete(haMembersPath(s1.id));                     // staff-member path
+  log.staff_path = { status: staffDel.status(), body: await staffDel.text() };
+  expect(staffDel.status()).toBe(204);
+  expect(await ha(s1User)).toEqual([]);
+
+  expect((await putStaffRoles(owner, s1.id, [ROLE.headAdmin.id])).status()).toBe(200);
+  await untickHeadAdminOnRolesTab(page, s1.id);                                    // Roles tab untick
+  await saveRoles(page, s1.name);
+  await page.screenshot({ path: shot('c3-owner-plus-roles-tab-untick-saved.png'), fullPage: true });
+  expect(await assignmentsOf(t, s1User)).toEqual([]);
+  expect(await roleMembers(owner, ROLE.headAdmin.id)).toEqual([]);
+  expect(await roleMemberCount(owner, ROLE.headAdmin.id)).toBe(0);
+  log.owner_still_head_admin_get = (await owner.get(`access-roles/${encodeURIComponent(ROLE.headAdmin.id)}`)).status();
+  expect(log.owner_still_head_admin_get).toBe(200);
+  evidence('c3-guard-with-owner.json', log);
   expect(serverErrors).toEqual([]);
+});
+
+test('PR549 C3 guard on a campus with no owner: the last Head Admin is blocked on every path and Remove is hidden', async ({ page }) => {
+  const t = seed.tenantId; const log: Record<string, any> = {};
+  // "No owner" = an empty Tenant.CreatedBy (the field is required, so it can't be absent; AccessRoleGuards treats empty as no owner).
+  // Actor: a staffer on a custom copy of Head Admin (all its permissions, but not a Head Admin holder).
+  const detail = await (await owner.get(`access-roles/${encodeURIComponent(ROLE.headAdmin.id)}`)).json();
+  const copy = await owner.post('access-roles', { data: { sourceSystemRole: ROLE.headAdmin.name, roleName: `HA Copy ${letters(5)}`, description: 'QA actor', permissions: detail.permissions } });
+  expect(copy.status(), await copy.text()).toBe(201);
+  const copyId = (await copy.json()).id as string;
+  const actorStaff = await invitedStaff(owner, 'Guardactor');
+  expect((await putStaffRoles(owner, actorStaff.staff.id, [copyId])).status()).toBe(200);
+  await sqlExec(`delete from "AccessRoleAssignments" where "TenantId" = ${q(t)} and "UserId" = ${q(seed.owner.userId)}`);
+  const ownerId = await mongo<string>(`const r = db.tenants.findOne({ _id: ObjectId(${JSON.stringify(t)}) }); db.tenants.updateOne({ _id: r._id }, { $set: { CreatedBy: '' } }); return r.CreatedBy`);
+  expect(ownerId).toBe(seed.owner.userId);
+  try {
+    const actor = await campusApi(actorStaff.phone, actorStaff.password);
+    // Last holder is a legacy login.
+    const legacy = seed.noMatch.account;
+    await insertAssignment(t, legacy.userId, 'Head Admin');
+    const rows = await roleMembers(actor, ROLE.headAdmin.id);
+    log.legacy_last_rows = rows;
+    expect(rows.map(m => m.userId)).toEqual([legacy.userId]);
+    expect(rows[0].removeBlockedReason).toBe(LAST_HEAD_ADMIN_GUARD);
+    const accDel = await removeRoleAccount(actor, ROLE.headAdmin.id, legacy.userId);
+    log.legacy_account_path = { status: accDel.status(), body: await accDel.text() };
+    expect(accDel.status()).toBe(400); expect(log.legacy_account_path.body).toContain(LAST_HEAD_ADMIN_GUARD);
+    watch5xx(page);
+    await signInUi(page, { identifier: actorStaff.phone, password: actorStaff.password }, `${BASE}/setup/roles/${encodeURIComponent(ROLE.headAdmin.id)}`);
+    await expect(await removeButton(page, ROLE.headAdmin.id, legacy.userId)).toHaveCount(0);
+    await page.screenshot({ path: shot('c3-no-owner-legacy-last-no-remove.png'), fullPage: true });
+
+    // Hand Head Admin to a bound staffer, drop the legacy login: the staffer is the last holder.
+    const s1 = seed.uniquePhone.staff; const s1User = seed.uniquePhone.account.userId;
+    expect((await putStaffRoles(actor, s1.id, [ROLE.headAdmin.id])).status()).toBe(200);
+    expect((await removeRoleAccount(actor, ROLE.headAdmin.id, legacy.userId)).status()).toBe(204);
+    const staffDel = await actor.delete(haMembersPath(s1.id));
+    log.staff_path = { status: staffDel.status(), body: await staffDel.text() };
+    expect(staffDel.status()).toBe(400); expect(log.staff_path.body).toContain(LAST_HEAD_ADMIN_GUARD);
+    const untick = await putStaffRoles(actor, s1.id, []);
+    log.roles_tab_api = { status: untick.status(), body: await untick.text() };
+    expect(untick.status()).toBe(400); expect(log.roles_tab_api.body).toContain(LAST_HEAD_ADMIN_GUARD);
+    await expect(await removeButton(page, ROLE.headAdmin.id, s1User)).toHaveCount(0);
+    await page.screenshot({ path: shot('c3-no-owner-staff-last-no-remove.png'), fullPage: true });
+    await untickHeadAdminOnRolesTab(page, s1.id);
+    await page.locator('[data-action="save-roles"]').click();
+    await expect(page.locator('[data-roles-error]')).toContainText(LAST_HEAD_ADMIN_GUARD, { timeout: 15_000 });
+    await page.screenshot({ path: shot('c3-no-owner-roles-tab-untick-refused.png'), fullPage: true });
+    expect((await assignmentsOf(t, s1User)).map(a => a.SystemRoleName)).toEqual([ROLE.headAdmin.name]);
+    // Probe (logged, not asserted): CreatedBy naming an account that no longer exists.
+    await mongo(`db.tenants.updateOne({ _id: ObjectId(${JSON.stringify(t)}) }, { $set: { CreatedBy: '000000000000000000000000' } }); return 1`);
+    log.probe_dangling_owner_row = (await roleMembers(actor, ROLE.headAdmin.id)).map(m => ({ name: m.name, removeBlockedReason: m.removeBlockedReason }));
+    await actor.dispose();
+    evidence('c3-guard-no-owner.json', log);
+    expect(serverErrors).toEqual([]);
+  } finally {
+    await mongo(`db.tenants.updateOne({ _id: ObjectId(${JSON.stringify(t)}) }, { $set: { CreatedBy: ${JSON.stringify(ownerId)} } }); return 1`);
+  }
 });
