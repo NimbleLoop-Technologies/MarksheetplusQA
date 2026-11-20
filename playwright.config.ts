@@ -168,6 +168,17 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], acceptDownloads: true },
     },
     {
+      // PR 479 (ClickUp 86eyjvhn0 + 86eyjvhn2) Family App merged upcoming exams and per-child filter.
+      // Self-seeding: two throwaway campuses, two classes, three linked children (plus a one-child family),
+      // published datesheets with overlapping and past papers. Local stack only, --workers=1.
+      name: 'family-exams',
+      testDir: './tests/family-exams',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 4 * 60_000,
+      use: { ...devices['Desktop Chrome'], baseURL: familyURL },
+    },
+    {
       name: 'family-setup',
       testDir: './fixtures',
       testMatch: /.*\.family-setup\.ts/,
