@@ -179,6 +179,17 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], baseURL: familyURL },
     },
     {
+      // PR 549 (CU-z94x8ean2x) role assignments to invited staff: Roles tab, role page members / drawer, and the
+      // 20261120_BindLegacyStaffAccounts data migration over pre-RBAC members. Self-seeding throwaway campus; re-runs the
+      // post-deployment hook (reads the stack's deploy credentials from QA_CI_WORK_DIR). Local stack only, serial.
+      name: 'access-roles',
+      testDir: './tests/access-roles',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 5 * 60_000,
+      use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
+    },
+    {
       name: 'family-setup',
       testDir: './fixtures',
       testMatch: /.*\.family-setup\.ts/,
