@@ -160,6 +160,8 @@ export default defineConfig({
       // PR 558 (ClickUp 86exmwjgc + 86extv6wg) Bookshop Stock Movements log and its CSV export. Self-seeding: one
       // throwaway campus with items, variants and dated movements (API), a second campus for tenant checks, and
       // role stand-ins in Postgres/Mongo for the permission cases. Local stack only (QA_PG_*, QA_MONGOSH), --workers=1.
+      // PR 552 (ClickUp 86extv6fx + 86extv6a8) Return / Replace a Sale: return-replace.spec.ts self-seeds two campuses (a fee-account
+      // student, custom roles for the permission cases) and skips itself on builds without the feature.
       name: 'bookshop',
       testDir: './tests/bookshop',
       fullyParallel: false,
