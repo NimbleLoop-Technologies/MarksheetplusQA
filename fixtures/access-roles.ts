@@ -144,10 +144,22 @@ export const staffRoles = async (api: APIRequestContext, staffId: string) => {
   return { status: r.status(), body: r.status() === 200 ? await r.json() as { roles: { id: string; name: string; type: string | number }[]; assignedRoleIds: string[] } : null, text: r.status() === 200 ? '' : await r.text() };
 };
 export const putStaffRoles = (api: APIRequestContext, staffId: string, roleIds: string[]) => api.put(`staff/${staffId}/access-roles`, { data: { roleIds } });
+export interface RoleMember {
+  staffId: string | null; name: string; signInPhone: string | null; userId?: string | null; isLegacy?: boolean; email?: string | null;
+  removeBlockedReason?: string | null;
+}
+/** Head Admin / role-removal guard copy (AccessRoleGuards, e8330e61). */
+export const OWNER_GUARD = "The campus owner's roles can't be removed.";
+export const LAST_HEAD_ADMIN_GUARD = 'This is the last Head Admin on this campus, so the role can\'t be removed.';
+/** The legacy row's Remove: takes the role off the account itself. */
+export const removeRoleAccount = (api: APIRequestContext, roleId: string, userId: string) =>
+  api.delete(`access-roles/${encodeURIComponent(roleId)}/accounts/${encodeURIComponent(userId)}`);
+export const roleMemberCount = async (api: APIRequestContext, roleId: string) =>
+  (await (await api.get(`access-roles/${encodeURIComponent(roleId)}`)).json()).memberCount as number;
 export const roleMembers = async (api: APIRequestContext, roleId: string) => {
   const r = await api.get(`access-roles/${encodeURIComponent(roleId)}/members`);
   expect(r.status(), `role ${roleId} members`).toBe(200);
-  return await r.json() as { staffId: string; name: string; signInPhone: string | null }[];
+  return await r.json() as RoleMember[];
 };
 export const staffAccess = async (api: APIRequestContext, staffId: string) => {
   const r = await api.get(`staff/${staffId}/profile`);

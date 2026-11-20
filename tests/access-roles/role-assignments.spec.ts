@@ -12,8 +12,9 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import {
   ROLE, BIND_MIGRATION, LEGACY_LOCK, type LegacySeed, seedLegacyCampus, campusApi, forgetBindMigration, runPostDeployment,
   staffRoles, putStaffRoles, roleMembers, staffAccess, assignmentsOf, bindingsFor, addStaffWithContacts, mobile549, mongo, INVITES,
+  OWNER_GUARD, LAST_HEAD_ADMIN_GUARD, removeRoleAccount, roleMemberCount, inviteAndAccept, letters,
 } from '../../fixtures/access-roles';
-import { signInUi, sql, q, EVIDENCE_DIR, shot } from '../../fixtures/payroll';
+import { signInUi, sql, sqlExec, q, EVIDENCE_DIR, shot, markLeft } from '../../fixtures/payroll';
 
 test.describe.configure({ mode: 'serial', timeout: 5 * 60_000 });
 
@@ -300,8 +301,16 @@ test('PR549 Add members drawer adds an invited member; legacy and uninvited staf
   await expect(row).toHaveAttribute('data-eligibility', 'eligible');
   for (const s of [seed.oneUserTwoStaff.staff[0], seed.twoUsersOneStaff.staff]) {
     await expect(drawer.locator(`[data-candidate="${s.id}"]`)).not.toHaveAttribute('data-eligibility', 'eligible');
+    await expect(drawer.locator(`[data-candidate="${s.id}"]`)).toHaveAttribute('data-eligibility', 'legacyaccess');
+    await expect(drawer.locator(`[data-candidate="${s.id}"] [data-reason]`)).toHaveText('App access active (legacy)');
     await expect(drawer.locator(`[data-candidate="${s.id}"]`).getByRole('checkbox')).toBeDisabled();
   }
+  const creator = drawer.locator(`[data-candidate="${seed.creatorStaff.staff.id}"]`);
+  await expect(creator).toHaveAttribute('data-eligibility', 'campusowner');
+  await expect(creator.locator('[data-reason]')).toHaveText('Campus owner (holds Head Admin)');
+  await expect(creator.getByRole('checkbox')).toBeDisabled();
+  await creator.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: shot('c2-drawer-legacy-owner-labels.png') });
   await drawer.locator(`[data-candidate="${seed.twoUsersOneStaff.staff.id}"]`).scrollIntoViewIfNeeded();
   await page.screenshot({ path: shot('ac-add-members-drawer.png') });
   await row.getByRole('checkbox').check();
@@ -311,6 +320,10 @@ test('PR549 Add members drawer adds an invited member; legacy and uninvited staf
 
   const bad = await owner.post(`access-roles/${encodeURIComponent(ROLE.campusManager)}/members`, { data: { staffIds: [seed.oneUserTwoStaff.staff[0].id] } });
   expect(bad.status(), 'adding an ambiguous legacy staffer').toBe(400);
+  const badOwner = await owner.post(`access-roles/${encodeURIComponent(ROLE.campusManager)}/members`, { data: { staffIds: [seed.creatorStaff.staff.id] } });
+  expect(badOwner.status(), 'adding the campus owner\'s staff record').toBe(400);
+  evidence('c2-drawer-direct-post.json', { legacy: { status: bad.status(), body: await bad.text() }, owner: { status: badOwner.status(), body: await badOwner.text() } });
+  expect((await assignmentsOf(seed.tenantId, seed.oneUserTwoStaff.account.userId)).map(a => a.SystemRoleName)).not.toContain(ROLE.campusManager);
   expect(serverErrors).toEqual([]);
 });
 
@@ -354,15 +367,150 @@ test('PR549 permissions: a Teacher cannot read or change roles (403) and anonymo
   await teacher.dispose(); await anon.dispose();
 });
 
-// Known finding, kept last: serial mode skips everything after a failure.
-test('PR549 C1-ROLE-COUNT-HIDDEN-HOLDERS: a role\'s member count matches the members it lists', async ({ page }) => {
-  const detail = await (await owner.get(`access-roles/${encodeURIComponent(ROLE.headAdmin.id)}`)).json();
-  const listed = await roleMembers(owner, ROLE.headAdmin.id);
-  evidence('bug-role-count-hidden-holders.json', { memberCount: detail.memberCount, listed: listed.map(m => m.name) });
+test('PR549 C2 legacy holders are listed as "Legacy login" rows; count matches rows; Remove revokes the role @smoke', async ({ page }) => {
+  const legacy = [seed.oneUserTwoStaff.account, ...seed.twoUsersOneStaff.accounts, seed.noMatch.account];
+  for (const a of legacy) {
+    if (!(await assignmentsOf(seed.tenantId, a.userId)).some(x => x.SystemRoleName === ROLE.headAdmin.name))
+      await sqlExec(`insert into "AccessRoleAssignments" ("Id","TenantId","UserId","AccessRoleId","SystemRoleName","Scope","CreatedDate","CreatedBy") values (gen_random_uuid(), ${q(seed.tenantId)}, ${q(a.userId)}, null, 'Head Admin', 'Tenant', now(), 'System')`);
+  }
+  const members = await roleMembers(owner, ROLE.headAdmin.id);
+  const count = await roleMemberCount(owner, ROLE.headAdmin.id);
+  evidence('c2-head-admin-members.json', { count, members });
+  expect(count, 'Head Admin "N members" equals rows listed').toBe(members.length);
+  for (const a of legacy) {
+    const row = members.find(m => m.userId === a.userId);
+    expect(row, `legacy holder ${a.first} listed`).toBeTruthy();
+    expect(row).toMatchObject({ isLegacy: true, staffId: null, name: `${a.first} Legacy`, removeBlockedReason: null });
+  }
   watch5xx(page);
   await signInUi(page, { identifier: seed.owner.phone, password: seed.owner.password }, `${BASE}/setup/roles/${encodeURIComponent(ROLE.headAdmin.id)}`);
-  await expect(page.locator('[data-role-members]')).toBeVisible({ timeout: 30_000 });
-  await page.screenshot({ path: shot('bug-role-count-hidden-holders.png'), fullPage: true });
-  // Unbound legacy holders (ambiguous / no staffer) are counted but never listed, so nobody can see or remove their Head Admin.
-  expect(detail.memberCount, 'Head Admin "N members" vs rows listed').toBe(listed.length);
+  await expect(page.locator('#role-members-table')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('[data-legacy="true"]')).toHaveCount(legacy.length);
+  await expect(page.getByText(`${members.length} member`, { exact: false }).first()).toBeVisible();
+  const legacyRow = page.locator('#role-members-table tr', { hasText: `${seed.noMatch.account.first} Legacy` });
+  await expect(legacyRow.locator('[data-legacy-badge]')).toHaveText('Legacy login');
+  await expect(legacyRow.locator('[data-member-contacts]')).toContainText(`+92${seed.noMatch.account.phone.slice(1)}`);
+  await page.screenshot({ path: shot('c2-legacy-rows.png'), fullPage: true });
+
+  await removeOnRolePage(page, ROLE.headAdmin.id, `${seed.noMatch.account.first} Legacy`);
+  expect(await assignmentsOf(seed.tenantId, seed.noMatch.account.userId)).toEqual([]);
+  expect(await roleMemberCount(owner, ROLE.headAdmin.id)).toBe(members.length - 1);
+  expect((await roleMembers(owner, ROLE.headAdmin.id)).length).toBe(members.length - 1);
+  // Access really goes: a fresh sign-in carries no permissions and the role screens refuse it.
+  const after = await campusApi(seed.noMatch.account.phone, seed.noMatch.account.password);
+  const status = (await after.get('access-roles')).status();
+  await after.dispose();
+  evidence('c2-legacy-removed-login.json', { getAccessRoles: status });
+  expect(status).toBe(403);
+  expect(serverErrors).toEqual([]);
+});
+
+test('PR549 C2 a Left staffer who still holds a role shows as a legacy row and can be removed', async ({ page }) => {
+  const phone = mobile549(); const email = `pr549-leaver+${letters(6)}@testenv.local`;
+  const s = await addStaffWithContacts(owner, { first: 'Leaver', phone, email });
+  const acc = await inviteAndAccept(owner, s.id, email);
+  expect((await assignmentsOf(seed.tenantId, acc.userId)).map(a => a.SystemRoleName)).toEqual([ROLE.teacher.name]);
+  await markLeft(owner, s.id, new Date(Date.now() - 86_400_000).toISOString().slice(0, 10));
+  const left = await assignmentsOf(seed.tenantId, acc.userId);
+  const members = await roleMembers(owner, ROLE.teacher.id);
+  const row = members.find(m => m.userId === acc.userId);
+  evidence('c2-left-holder.json', { assignmentsAfterLeft: left, row, count: await roleMemberCount(owner, ROLE.teacher.id), rows: members.length });
+  expect(await roleMemberCount(owner, ROLE.teacher.id)).toBe(members.length);
+  // Mark-as-left takes the role away itself; a Left holder only exists from older data, so put one back the way such data looks.
+  expect(left, 'mark-as-left removes the role').toEqual([]);
+  expect(row, 'no row once mark-as-left removed the role').toBeUndefined();
+  await sqlExec(`insert into "AccessRoleAssignments" ("Id","TenantId","UserId","AccessRoleId","SystemRoleName","Scope","CreatedDate","CreatedBy") values (gen_random_uuid(), ${q(seed.tenantId)}, ${q(acc.userId)}, null, 'Teacher', 'Tenant', now(), 'System')`);
+  const membersAfter = await roleMembers(owner, ROLE.teacher.id);
+  const leftRow = membersAfter.find(m => m.userId === acc.userId);
+  const leftAccess = await campusApi(phone, acc.password).then(async a => { const st = (await a.get('access-roles')).status(); await a.dispose(); return st; }).catch(e => `sign-in refused: ${String(e).slice(0, 200)}`);
+  evidence('c2-left-holder-restored.json', { row: leftRow, count: await roleMemberCount(owner, ROLE.teacher.id), rows: membersAfter.length, leftAccountAccessRolesGet: leftAccess });
+  expect(await roleMemberCount(owner, ROLE.teacher.id)).toBe(membersAfter.length);
+  const row2 = leftRow;
+  expect(row2, 'Left holder listed').toBeTruthy();
+  expect(row2).toMatchObject({ isLegacy: true, staffId: null, removeBlockedReason: null });
+  watch5xx(page);
+  await signInUi(page, { identifier: seed.owner.phone, password: seed.owner.password }, `${BASE}/setup/roles/${encodeURIComponent(ROLE.teacher.id)}`);
+  await expect(page.locator('#role-members-table')).toBeVisible({ timeout: 30_000 });
+  await page.screenshot({ path: shot('c2-left-holder-row.png'), fullPage: true });
+  await removeOnRolePage(page, ROLE.teacher.id, row2!.name);
+  expect(await assignmentsOf(seed.tenantId, acc.userId)).toEqual([]);
+  expect(serverErrors).toEqual([]);
+});
+
+test('PR549 C2 guard: the campus owner and the last Head Admin cannot be removed on any path; Remove hidden on those rows', async ({ page }) => {
+  const t = seed.tenantId;
+  const blocked = (body: string, msg: string) => expect(body).toContain(msg);
+  const log: Record<string, any> = {};
+  // A second Head Admin (bound by invite) acts, since the owner removing their own row hits the own-roles rule first.
+  const aPhone = mobile549(); const aEmail = `pr549-admin+${letters(6)}@testenv.local`;
+  const adminStaff = await addStaffWithContacts(owner, { first: 'Guardadmin', phone: aPhone, email: aEmail });
+  const adminAcc = await inviteAndAccept(owner, adminStaff.id, aEmail);
+  expect((await putStaffRoles(owner, adminStaff.id, [ROLE.headAdmin.id])).status()).toBe(200);
+  const admin = await campusApi(aPhone, adminAcc.password);
+  // Owner: give the creator an explicit Teacher row (as any assignment the owner might hold) -> refused, no Remove.
+  if (!(await assignmentsOf(t, seed.owner.userId)).length)
+    await sqlExec(`insert into "AccessRoleAssignments" ("Id","TenantId","UserId","AccessRoleId","SystemRoleName","Scope","CreatedDate","CreatedBy") values (gen_random_uuid(), ${q(t)}, ${q(seed.owner.userId)}, null, 'Teacher', 'Tenant', now(), 'System')`);
+  const ownerRow = (await roleMembers(admin, ROLE.teacher.id)).find(m => m.userId === seed.owner.userId);
+  log.ownerRow = ownerRow;
+  expect(ownerRow?.removeBlockedReason).toBe(OWNER_GUARD);
+  const ownerDel = await removeRoleAccount(admin, ROLE.teacher.id, seed.owner.userId);
+  log.ownerAccountRemove = { status: ownerDel.status(), body: await ownerDel.text() };
+  expect(ownerDel.status()).toBe(400); blocked(log.ownerAccountRemove.body, OWNER_GUARD);
+  const ownerSelf = await removeRoleAccount(owner, ROLE.teacher.id, seed.owner.userId);
+  log.ownerSelfRemove = { status: ownerSelf.status(), body: await ownerSelf.text() };
+  expect(ownerSelf.status()).toBe(400);
+  const creatorStaffDel = await admin.delete(`access-roles/${encodeURIComponent(ROLE.teacher.id)}/members/${seed.creatorStaff.staff.id}`);
+  log.ownerStaffRemove = { status: creatorStaffDel.status(), body: await creatorStaffDel.text() };
+  expect(creatorStaffDel.status(), 'creator staff path never 5xx').toBeLessThan(500);
+  expect((await assignmentsOf(t, seed.owner.userId)).map(a => a.SystemRoleName)).toEqual([ROLE.teacher.name]);
+  await admin.dispose();
+
+  // Down to one Head Admin holder, a legacy login (owner acts).
+  const holders = (await roleMembers(owner, ROLE.headAdmin.id)).filter(m => m.userId !== seed.owner.userId)
+    .sort((a, b) => Number(a.isLegacy) - Number(b.isLegacy));
+  for (const m of holders.slice(0, -1)) {
+    const r = m.staffId ? await owner.delete(`access-roles/${encodeURIComponent(ROLE.headAdmin.id)}/members/${m.staffId}`) : await removeRoleAccount(owner, ROLE.headAdmin.id, m.userId!);
+    expect(r.status(), `remove ${m.name}: ${await r.text()}`).toBeLessThan(300);
+  }
+  const lastLegacy = (await roleMembers(owner, ROLE.headAdmin.id));
+  expect(lastLegacy).toHaveLength(1);
+  expect(lastLegacy[0].isLegacy).toBe(true);
+  log.lastHolderRow = lastLegacy[0];
+  expect(lastLegacy[0].removeBlockedReason).toBe(LAST_HEAD_ADMIN_GUARD);
+  const accDel = await removeRoleAccount(owner, ROLE.headAdmin.id, lastLegacy[0].userId!);
+  log.lastAccountRemove = { status: accDel.status(), body: await accDel.text() };
+  expect(accDel.status()).toBe(400); blocked(log.lastAccountRemove.body, LAST_HEAD_ADMIN_GUARD);
+  log.ownerStillSignsInWithHeadAdmin = (await (await owner.get(`access-roles/${encodeURIComponent(ROLE.headAdmin.id)}`)).status());
+
+  // Hand Head Admin to the bound staffer, then drop the legacy login: the staffer is now the last holder.
+  const s1 = seed.uniquePhone.staff;
+  expect((await putStaffRoles(owner, s1.id, [ROLE.headAdmin.id])).status()).toBe(200);
+  expect((await removeRoleAccount(owner, ROLE.headAdmin.id, lastLegacy[0].userId!)).status()).toBe(204);
+  const staffDel = await owner.delete(`access-roles/${encodeURIComponent(ROLE.headAdmin.id)}/members/${s1.id}`);
+  log.lastStaffRemove = { status: staffDel.status(), body: await staffDel.text() };
+  expect(staffDel.status()).toBe(400); blocked(log.lastStaffRemove.body, LAST_HEAD_ADMIN_GUARD);
+  const untick = await putStaffRoles(owner, s1.id, [ROLE.teacher.id]);
+  log.lastRolesTabUntick = { status: untick.status(), body: await untick.text() };
+  expect(untick.status()).toBe(400); blocked(log.lastRolesTabUntick.body, LAST_HEAD_ADMIN_GUARD);
+
+  watch5xx(page);
+  await signInUi(page, { identifier: seed.owner.phone, password: seed.owner.password }, `${BASE}/setup/roles/${encodeURIComponent(ROLE.headAdmin.id)}`);
+  const row = page.locator('#role-members-table tr', { hasText: s1.name });
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await expect(row.locator('[data-action="remove-member"]')).toHaveCount(0);
+  await page.screenshot({ path: shot('c2-guard-last-head-admin-row.png'), fullPage: true });
+  await page.goto(`${BASE}/setup/roles/${encodeURIComponent(ROLE.teacher.id)}`);
+  const orow = page.locator(`#role-members-table [data-member="${seed.owner.userId}"]`).locator('xpath=ancestor::tr');
+  await expect(orow).toBeVisible({ timeout: 30_000 });
+  await expect(orow.locator('[data-action="remove-member"]')).toHaveCount(0);
+  await page.screenshot({ path: shot('c2-guard-owner-row.png'), fullPage: true });
+  await page.goto(`${BASE}/staff/register/${s1.id}?tab=roles`);
+  await expect(page.locator('[data-staff-card="roles"]')).toHaveAttribute('data-state', 'loaded', { timeout: 30_000 });
+  await page.getByRole('button', { name: `Remove ${ROLE.headAdmin.name}` }).click();
+  await page.locator('[data-action="save-roles"]').click();
+  await expect(page.locator('[data-roles-error]')).toContainText(LAST_HEAD_ADMIN_GUARD, { timeout: 15_000 });
+  await page.screenshot({ path: shot('c2-guard-roles-tab-untick.png'), fullPage: true });
+  expect((await assignmentsOf(t, seed.uniquePhone.account.userId)).map(a => a.SystemRoleName)).toEqual([ROLE.headAdmin.name]);
+  evidence('c2-guard.json', log);
+  expect(serverErrors).toEqual([]);
 });
