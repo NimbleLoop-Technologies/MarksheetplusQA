@@ -21,6 +21,7 @@ import { newCampusOwner, type CampusOwner } from '../../fixtures/campus-owner';
 import { signInToWebApp } from '../../pages/fees/AccountOffice';
 import * as f from '../../fixtures/fees';
 import * as b from '../../fixtures/bookshop';
+import { openPosDay } from '../../fixtures/pos-day';
 
 const EV = process.env.QA_EVIDENCE_DIR ?? path.join(__dirname, '..', '..', 'test-results', 'evidence');
 const ignoreHTTPSErrors = (process.env.QA_IGNORE_HTTPS_ERRORS ?? 'false').toLowerCase() === 'true';
@@ -80,7 +81,7 @@ test.beforeAll(async ({}, info) => {
     const a = await newCampusOwner('rr552a');
     const school = await f.setupSchool(a, 1);
     const student = await f.addStudent(a, { name: f.personName('Sara'), classId: school.classes[0].id, fatherName: f.personName('Imran'), fatherMobile: f.familyMobile() });
-    expect((await a.api.post('bookshop/point-of-sale/day', { data: { openingFloat: 50_000 } })).status()).toBeLessThan(300);
+    expect((await openPosDay(a.api, 50_000)).status(), 'open POS day').toBeLessThan(300);
     const c = await newCampusOwner('rr552c');
     const role = async (label: string, edit: boolean) => (await f.ok(await c.api.post('access-roles', {
       data: { sourceSystemRole: 'Bookshop Admin', roleName: `${label} ${f.letters(4)}`, description: label, permissions: [{ moduleKey: 'bookshop', see: true, edit, approve: false, export: false, publish: false }] },

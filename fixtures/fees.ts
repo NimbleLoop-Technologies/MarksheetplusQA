@@ -20,6 +20,7 @@ import path from 'node:path';
 import { expect, type APIRequestContext, type APIResponse } from '@playwright/test';
 import { cacheOwner, ownerFromCache, type CachedOwner, type CampusOwner } from './campus-owner';
 import { mongo, WA_KIND } from './quota';
+import { openPosDay } from './pos-day';
 
 const run = promisify(execFile);
 
@@ -439,7 +440,7 @@ export async function setupBookshop(owner: CampusOwner, price = 300): Promise<st
     }),
     'bookshop item',
   );
-  const day = await owner.api.post('bookshop/point-of-sale/day', { data: { openingFloat: 0 } });
+  const day = await openPosDay(owner.api, 0);
   // 409/400 when already open is fine.
   expect(day.status(), `open POS day: ${await day.text()}`).toBeLessThan(500);
   return (item.item ?? item).id;
