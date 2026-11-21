@@ -164,16 +164,18 @@ test('Staff mark-as-left: local today saves, local tomorrow is rejected', async 
 });
 
 test('Staff rehire: local today saves, local tomorrow is rejected', async () => {
-  // staffA should already be marked left on local today (or not, if the UTC bug rejected that).
-  // If still active, mark left on a clearly past day so rehire can be attempted.
-  const profile = await shot(await owner.api.get(`staff/${staffA.id}/profile`));
-  results['rehire-profile-before'] = profile;
-  if (ok(profile) && !/left/i.test(profile.body)) {
+  // staffA is left only when mark-as-left on local today saved (the PR). On the UTC-date
+  // baseline that call is rejected, so leave them on a clearly past day first.
+  // Do not regex the profile body: the fixture staff name used to contain "Left".
+  const markedToday = ok((results['mark-as-left'] as { today?: Shot } | undefined)?.today ?? { status: 0, body: '' });
+  if (!markedToday) {
     const past = await shot(await owner.api.post(`staff/${staffA.id}/mark-as-left`, {
       data: { lastWorkingDay: iso('2026-11-01'), reason: 'Resigned', note: 'QA date check past' },
     }));
     results['rehire-mark-past'] = past;
   }
+  const profile = await shot(await owner.api.get(`staff/${staffA.id}/profile`));
+  results['rehire-profile-before'] = profile;
   const rehire = async (d: string) => shot(await owner.api.post(`staff/${staffA.id}/rehire`, {
     data: {
       designationId: DESIGNATION.teacher, category: 'Teaching', reportsToStaffId: null,
