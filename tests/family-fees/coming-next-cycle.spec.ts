@@ -16,7 +16,7 @@ import { test, expect, devices, type Browser, type Page } from '@playwright/test
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { newCampusOwner, type CampusOwner } from '../../fixtures/campus-owner';
-import { callFamilyApi, createFamilyParent, type FreshParent } from '../../fixtures/devenv';
+import { callFamilyApi, createFamilyParent, waitUntilInviteProjected, type FreshParent } from '../../fixtures/devenv';
 import { LoginPage } from '../../pages/LoginPage';
 import * as f from '../../fixtures/fees';
 
@@ -51,16 +51,13 @@ const shot = async (page: Page, name: string) => {
 
 /** Owner issues the student's invite code; the parent redeems it and accepts it as a new child. */
 async function link(o: CampusOwner, parent: FreshParent, studentId: string): Promise<void> {
-  const sent = await f.ok(await o.api.post(`students/${studentId}/parent-family/invite`), `invite ${studentId}`);
+  const sent = await f.ok(await o.api.post(`students/${studentId}/parent-family/invite`, { data: { sendWhatsApp: false } }), `invite ${studentId}`);
   expect(sent.code, `invite code for ${studentId}: ${JSON.stringify(sent)}`).toBeTruthy();
-  // The code becomes redeemable once the school's invite reaches the family plane (outbox relay, a few seconds).
-  let redeem = { status: 0, body: '' };
-  await expect(async () => {
-    redeem = await callFamilyApi(parent, 'POST', '/family/link-invites/redeem', { code: sent.code });
-    expect(redeem.status, `redeem: ${redeem.body}`).toBe(200);
-  }).toPass({ timeout: 60_000, intervals: [2_000] });
+  await waitUntilInviteProjected(studentId);
+  const redeem = await callFamilyApi(parent, 'POST', '/family/link-invites/redeem', { code: sent.code });
+  expect(redeem.status, `redeem: ${redeem.body}`).toBe(200);
   const inviteId = JSON.parse(redeem.body).inviteId as string;
-  const accept = await callFamilyApi(parent, 'POST', `/family/link-invites/${inviteId}/accept`, { childId: null, token: null });
+  const accept = await callFamilyApi(parent, 'POST', `/family/link-invites/${inviteId}/accept`, { childId: null, token: sent.code });
   expect(accept.status, `accept: ${accept.body}`).toBe(200);
 }
 

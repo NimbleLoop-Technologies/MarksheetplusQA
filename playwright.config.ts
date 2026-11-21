@@ -34,6 +34,8 @@ export default defineConfig({
     video: 'retain-on-failure',
     actionTimeout: 15_000,
     navigationTimeout: 30_000,
+    // PR 571 Copy code uses navigator.clipboard.writeText; a denial crashes the WASM drawer.
+    permissions: ['clipboard-read', 'clipboard-write'],
   },
   projects: [
     {

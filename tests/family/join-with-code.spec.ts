@@ -7,7 +7,7 @@
  */
 import type { Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/family';
-import { expireInvite, waitForInviteWhatsApp, type SeededStudent } from '../../fixtures/devenv';
+import { expireInvite, waitUntilInviteProjected, type SeededStudent } from '../../fixtures/devenv';
 import { StudentsRegisterPage } from '../../pages/StudentsRegisterPage';
 import { FamilyInviteCodeDrawer } from '../../pages/FamilyInviteCodeDrawer';
 import { LoginPage } from '../../pages/LoginPage';
@@ -18,7 +18,7 @@ const SCHOOL = 'Testenv High School - Main';
 const INVALID = "That code isn't valid. Check it and try again.";
 const USED = 'This code has already been used. Ask the school for a new one if you still need to connect.';
 const DECLINED = 'This code was declined as "not my child", so it no longer works. If that was a mistake, ask the school for a new code.';
-const DRAWER_REJECTED = "The parent said this isn't their child. Check the father's mobile number, then generate a new code.";
+const DRAWER_REJECTED = "Declined by parent: they said this isn't their child. Check the number, then send a new code.";
 const WITHDRAWN = 'The school has withdrawn this code. Ask them to send you a new one.';
 const EXPIRED = `This code has expired. Ask ${SCHOOL} to send you a new one.`;
 const EMPTY = 'Enter the code from your WhatsApp message.';
@@ -28,8 +28,9 @@ async function issueCode(adminPage: Page, student: SeededStudent): Promise<{ cod
   const register = new StudentsRegisterPage(adminPage);
   await register.goto();
   const drawer = await register.openFamilyInviteDrawer(student);
+  // Copy code issues a live redeemable code without a WhatsApp send (PR 571, code-only).
   const code = await drawer.generate();
-  await waitForInviteWhatsApp(code);
+  await waitUntilInviteProjected(student.id);
   return { code, drawer };
 }
 
@@ -143,8 +144,8 @@ test.describe('Join with an invite code', () => {
     await join.goto(bare(code));
     await expect(join.connectButton).toBeVisible();
 
-    // connect() returns on the click. The dashboard (and the school's loss of the invite action)
-    // follow the accept response and the navigation to /dashboard, not the click itself.
+    // connect() returns on the click. PR 571: the parent lands on the child's page, not Home.
+    // The school-side Parent app action stays; Linked follows the worker shortly after.
     const accepted = page.waitForResponse(
       (r) => r.request().method() === 'POST' && /\/link-invites\/[^/]+\/accept$/.test(r.url()),
       { timeout: 30_000 },
@@ -152,13 +153,14 @@ test.describe('Join with an invite code', () => {
     await join.connect();
     expect((await accepted).ok(), 'accept').toBeTruthy();
 
+    await expect(page).toHaveURL(/\/children\/[^/]+/, { timeout: 30_000 });
     const dashboard = new FamilyDashboardPage(page);
-    await dashboard.expectLoaded();
     await expectChildOnDashboard(dashboard, student.fullName);
 
     const register = new StudentsRegisterPage(adminPage);
     await register.goto();
-    await expect.poll(() => register.rowActionNames(student), { timeout: 30_000 }).not.toContain('Family invite code');
+    await expect.poll(async () => (await register.rowActionNames(student)).includes('Parent app'), { timeout: 30_000 }).toBeTruthy();
+    await expect.poll(async () => (await register.rowActionNames(student)), { timeout: 5_000 }).not.toEqual(expect.arrayContaining(['Link parent', 'Invite code', 'Family invite code']));
   });
 
   test('a code that was already used is refused with the already-used message', async ({ page, adminPage, student }) => {
@@ -166,7 +168,7 @@ test.describe('Join with an invite code', () => {
     const join = new JoinWithCodePage(page);
     await join.goto(bare(code));
     await join.connect();
-    await new FamilyDashboardPage(page).expectLoaded();
+    await expect(page).toHaveURL(/\/children\/[^/]+/, { timeout: 30_000 });
 
     await join.goto();
     await join.submitCode(code);
@@ -179,7 +181,7 @@ test.describe('Join with an invite code', () => {
     const join = new JoinWithCodePage(page);
     await join.goto(bare(code));
     await join.connect();
-    await new FamilyDashboardPage(page).expectLoaded();
+    await expect(page).toHaveURL(/\/children\/[^/]+/, { timeout: 30_000 });
 
     await page.goBack();
 
@@ -202,8 +204,8 @@ test.describe('Join with an invite code', () => {
     await join.connectButton.dblclick();
     expect((await accepted).ok(), 'accept').toBeTruthy();
 
+    await expect(page).toHaveURL(/\/children\/[^/]+/, { timeout: 30_000 });
     const dashboard = new FamilyDashboardPage(page);
-    await dashboard.expectLoaded();
     await expectChildOnDashboard(dashboard, student.fullName);
     expect(acceptCalls).toHaveLength(1);
   });
@@ -214,7 +216,9 @@ test.describe('Join with an invite code', () => {
     await join.goto(bare(code));
 
     await join.startReject();
-    await expect(join.main).toContainText("We'll tell the school this isn't your child so they can correct the number.");
+    // PR 571 confirmation is the heading plus Yes/Cancel; the older "correct the number" body is gone.
+    await expect(join.rejectConfirmation).toBeVisible();
+    await expect(join.confirmRejectButton).toBeVisible();
     await join.cancelRejectButton.click();
 
     await expect(join.rejectConfirmation).toBeHidden();
@@ -275,7 +279,6 @@ test.describe('Join with an invite code', () => {
   test('a regenerated code replaces the old one: the old code is invalid, the new one works', async ({ page, adminPage, student }) => {
     const { code: oldCode, drawer } = await issueCode(adminPage, student);
     const newCode = await drawer.regenerate(oldCode);
-    await waitForInviteWhatsApp(newCode);
     const join = new JoinWithCodePage(page);
 
     await join.goto();
@@ -295,7 +298,6 @@ test.describe('Join with an invite code', () => {
     await expect(join.connectButton).toBeVisible();
 
     const newCode = await drawer.regenerate(oldCode);
-    await waitForInviteWhatsApp(newCode);
     const accept = page.waitForResponse((r) => /\/link-invites\/[^/]+\/accept$/.test(r.url()) && r.request().method() === 'POST');
     await join.connect();
 
@@ -321,7 +323,6 @@ test.describe('Join with an invite code', () => {
     await expect(join.connectButton).toBeVisible({ timeout: 30_000 });
 
     const newCode = await drawer.regenerate(oldCode);
-    await waitForInviteWhatsApp(newCode);
     await join.connect();
 
     await expect(other).toHaveURL(/\/join/);
@@ -332,21 +333,19 @@ test.describe('Join with an invite code', () => {
     await context.close();
   });
 
-  test('a cancelled code is refused as withdrawn', async ({ page, adminPage, student }) => {
-    const { code, drawer } = await issueCode(adminPage, student);
-    await drawer.startCancelInvite();
-    await drawer.confirmCancelInvite();
-    await expect(drawer.notice).toHaveText('Invite cancelled.');
-    const join = new JoinWithCodePage(page);
-
-    await join.goto();
-    // The withdrawal reaches the family plane on the relay's next poll (~5 s). Until then the code
-    // still opens the card, so step back to the form between attempts.
-    await expect(async () => {
-      if (await join.useDifferentCodeButton.isVisible()) await join.useDifferentCode();
-      await join.submitCode(code);
-      await expect(join.codeInput).toHaveAccessibleDescription(WITHDRAWN, { timeout: 3_000 });
-    }).toPass({ timeout: 30_000 });
+  test('the leftover cancel endpoint still answers without error (Cancel invite was removed from the drawer)', async ({ adminPage, student }) => {
+    // PR 571 removed Cancel invite from the Parent app drawer. Staff revoke a live code with New code
+    // (covered below). The cancel route may still exist; this only checks it answers. Do not redeem-poll
+    // for withdrawal: 404s count toward the 5/15-min lockout, and copy-only invites often do not re-fanout.
+    const { captureInviteApi, fireInviteAction } = await import('../../fixtures/school-invite-api');
+    const register = new StudentsRegisterPage(adminPage);
+    await register.goto();
+    const captured = captureInviteApi(adminPage, student.id);
+    const drawer = await register.openFamilyInviteDrawer(student);
+    await drawer.generate();
+    const api = await captured;
+    const cancelled = await fireInviteAction(api, 'cancel', Date.now());
+    expect(cancelled.status, 'cancel endpoint').toBeLessThan(300);
   });
 
   test('an expired code is refused, naming the school and asking for a new code (AC8)', async ({ page, adminPage, student }) => {
@@ -370,7 +369,6 @@ test.describe('Join with an invite code', () => {
     await expect(drawer.code).toHaveCount(0);
     const newCode = await drawer.generate();
     expect(newCode).not.toBe(expiredCode);
-    await waitForInviteWhatsApp(newCode);
 
     const join = new JoinWithCodePage(page);
     await join.goto(bare(newCode));
@@ -397,7 +395,6 @@ test.describe('Join with an invite code', () => {
     await fresh.goto();
     const current = await (await fresh.openFamilyInviteDrawer(student)).currentCode();
     expect([codeA, codeB]).toContain(current);
-    await waitForInviteWhatsApp(current);
 
     const join = new JoinWithCodePage(page);
     await join.goto();
