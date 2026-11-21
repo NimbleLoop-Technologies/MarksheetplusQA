@@ -28,6 +28,8 @@ let parent: FreshParent;
 let alia: f.Student;
 let unplacedId: string;
 let unplacedName = 'Zain Unplaced';
+let orangeId = '';
+let term1Id = '';
 
 const shot = async (page: Page, name: string) => {
   mkdirSync(EV, { recursive: true });
@@ -91,7 +93,7 @@ test.beforeAll(async () => {
   mkdirSync(EV, { recursive: true });
   mkdirSync(SEED_DIR, { recursive: true, mode: 0o700 });
   owner = await newCampusOwner('pr569');
-  await f.ok(await owner.api.post('sessions/create', {
+  const session = await f.ok(await owner.api.post('sessions/create', {
     data: {
       sessionName: '2026-2027', startDate: '2026-09-01', endDate: '2027-06-30',
       terms: [
@@ -100,12 +102,15 @@ test.beforeAll(async () => {
       ],
     },
   }), 'sessions/create');
+  term1Id = session.terms?.[0]?.id ?? session.Terms?.[0]?.Id ?? '';
+  expect(term1Id, 'term 1 id').toBeTruthy();
   const orange = await f.ok(await owner.api.post('classes/create', {
     data: { className: 'orange', grade: '7', sections: [{ sectionName: 'A', size: 40 }], subjects: null },
   }), 'orange');
+  orangeId = orange.id;
   parent = await createFamilyParent();
   const father = 'Farooq Ubc';
-  alia = await f.addStudent(owner, { name: 'Alia Ubc', classId: orange.id, fatherName: father, fatherMobile: parent.phone });
+  alia = await f.addStudent(owner, { name: 'Alia Ubc', classId: orangeId, fatherName: father, fatherMobile: parent.phone });
   const admissionId = `P569-${String(randomInt(10000, 99999))}`;
   const unplacedRes = await owner.api.post('students/quick-add', {
     data: {
@@ -158,4 +163,49 @@ test('Unplaced child shows "Class not available"', async ({ browser }) => {
   expect(headerText, `header was "${headerText}"`).toMatch(/Zain\s*·\s*Class not available/);
   expect(headerText, `school name should not appear in the header: "${headerText}"`).not.toMatch(/School/i);
   expect(main).toMatch(/No upcoming exams for Zain\.?/);
+});
+
+test('Awaiting card for an unplaced child has no empty class slot (Name · Class not available · school)', async ({ browser }) => {
+  test.setTimeout(4 * 60_000);
+  // Awaiting cards only render on the All tab when at least one sibling has a published exam.
+  const subjects = await f.ok(await owner.api.get('grades/7/default-subjects'), 'default subjects grade 7');
+  const subjectName = (subjects as { name?: string; Name?: string }[])[0]?.name ?? (subjects as { Name?: string }[])[0]?.Name;
+  expect(subjectName, `need a subject to publish: ${JSON.stringify(subjects).slice(0, 400)}`).toBeTruthy();
+  await f.ok(await owner.api.post('datesheet/init', { data: { termId: term1Id } }), 'datesheet/init');
+  const saved = await f.ok(await owner.api.post('datesheet/save-assignments', {
+    data: {
+      termId: term1Id,
+      assignments: [{ classId: orangeId, examDate: '2026-12-01T00:00:00Z', subjectName }],
+    },
+  }), 'datesheet/save-assignments');
+  expect(saved.failures ?? saved.Failures ?? [], `save-assignments failures: ${JSON.stringify(saved)}`).toEqual([]);
+  await f.ok(await owner.api.post(`datesheet/publish/${term1Id}`), 'datesheet/publish');
+  await expect(async () => {
+    const res = await callFamilyApi(parent, 'GET', '/family/exams');
+    expect(res.status, res.body.slice(0, 400)).toBe(200);
+    const body = JSON.parse(res.body);
+    const awaiting = body.awaiting ?? body.Awaiting ?? [];
+    const zain = awaiting.find((row: { childName?: string; ChildName?: string }) => /Zain/i.test(row.childName ?? row.ChildName ?? ''));
+    expect(zain, `Zain should be awaiting, body=${res.body.slice(0, 800)}`).toBeTruthy();
+    const className = (zain.className ?? zain.ClassName ?? '') as string;
+    writeFileSync(path.join(EV, 'awaiting-zain.json'), JSON.stringify(zain, null, 2));
+    // API blanks the "Not assigned" placeholder; the card must not be given a blank class to render as an empty slot.
+    expect(className.trim() === '' || /class not available/i.test(className), `awaiting className should be blank or "Class not available", got "${className}"`).toBeTruthy();
+    expect(className, `placeholder must not leak onto the awaiting card: "${className}"`).not.toMatch(/not assigned/i);
+  }).toPass({ timeout: 90_000, intervals: [2_000] });
+
+  const page = await parentPage(browser);
+  await page.getByTestId('family-nav-item').filter({ hasText: 'Exams & Datesheet' }).click();
+  await expect(page).toHaveURL(/\/exams/, { timeout: 30_000 });
+  await expect(page.getByRole('heading', { name: 'Exams & Datesheet' })).toBeVisible({ timeout: 30_000 });
+  const allChip = page.getByRole('tab', { name: /^All$/ });
+  if (await allChip.count()) await allChip.click();
+  const card = page.getByText('Datesheet not published yet.').locator('xpath=ancestor::*[contains(@class,"rounded-lg")][1]');
+  await expect(card, 'Zain should have an awaiting card when All is selected').toBeVisible({ timeout: 20_000 });
+  const cardText = (await card.innerText()).replace(/\s+/g, ' ').trim();
+  writeFileSync(path.join(EV, 'awaiting-card-zain.txt'), cardText);
+  await shot(page, 'awaiting-card-zain');
+  expect(cardText, `awaiting card was "${cardText}"`).toMatch(/Zain\s*·\s*Class not available\s*·/);
+  expect(cardText, `empty class slot in awaiting card: "${cardText}"`).not.toMatch(/Zain\s*·\s*·/);
+  expect(cardText, `Not Assigned must not appear: "${cardText}"`).not.toMatch(/not assigned/i);
 });
