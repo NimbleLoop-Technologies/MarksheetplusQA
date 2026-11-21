@@ -14,6 +14,8 @@ export class FamilyInviteCodeDrawer {
   readonly statusMessage: Locator;
   /** Inline success Alert (role=status with a heading). */
   readonly notice: Locator;
+  /** Same notice via the component hook (covers the copy-failed fallback). */
+  readonly inviteNotice: Locator;
   /** Inline danger Alert (role=alert with a heading). */
   readonly error: Locator;
   readonly copyButton: Locator;
@@ -35,6 +37,7 @@ export class FamilyInviteCodeDrawer {
     this.code = this.root.locator('[data-invite-code]');
     this.statusMessage = this.root.locator('[data-invite-message]');
     this.notice = this.root.getByRole('status').getByRole('heading', { level: 3 });
+    this.inviteNotice = this.root.locator('[data-invite-notice]');
     this.whatsAppBlocked = this.root.locator('[data-whatsapp-blocked]');
     // The trial/exhausted WhatsApp banner is also role=alert with a heading; it is not an error.
     this.error = this.root.getByRole('alert').filter({ hasNot: this.whatsAppBlocked }).getByRole('heading', { level: 3 });

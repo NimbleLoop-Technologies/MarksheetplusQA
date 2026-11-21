@@ -101,6 +101,30 @@ test.describe('Parent app drawer', () => {
       await expect(drawer.notice).toHaveText('Code copied.');
       expect(await drawer.clipboardText()).toBe(code);
       await expect(drawer.root).toBeVisible();
+      await expect(page.locator('#blazor-error-ui')).not.toBeVisible();
+    });
+  });
+
+  // PR 571 cycle 2 (17d394e6): a denied clipboard must not crash the WASM drawer.
+  test.describe('without clipboard access', () => {
+    test.use({ permissions: [] });
+
+    test('Copy still shows the code and a copy-by-hand notice, and does not crash', async ({ page, student }) => {
+      const pageErrors: string[] = [];
+      page.on('pageerror', (e) => pageErrors.push(e.message));
+      const register = new StudentsRegisterPage(page);
+      await register.goto();
+      const drawer = await register.openFamilyInviteDrawer(student);
+      const code = await drawer.generate();
+
+      expect(code).toMatch(/^[A-HJKMNP-Z2-9]{3}-[A-HJKMNP-Z2-9]{3}$/);
+      await expect(drawer.inviteNotice).toHaveText(`Couldn't copy automatically. The code is ${code}. Copy it by hand.`);
+      await expect(drawer.notice).toHaveText(`Couldn't copy automatically. The code is ${code}. Copy it by hand.`);
+      await expect(drawer.code).toHaveText(code);
+      await expect(page.locator('#blazor-error-ui')).not.toBeVisible();
+      await expect(drawer.root).toBeVisible();
+      // Self-signed CI certs make the service worker fail to register; that is not a Copy crash.
+      expect(pageErrors.filter((m) => !/ServiceWorker|SSL certificate/i.test(m)), pageErrors.join('\n')).toEqual([]);
     });
   });
 
