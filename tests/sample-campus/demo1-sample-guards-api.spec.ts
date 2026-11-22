@@ -11,7 +11,7 @@
  * 1-minute "not a sample" cache in every process.
  */
 import { test, expect } from '@playwright/test';
-import { BackOffice, mongo, newCampusOwner, quotaDb, workerLogMentions, WA_KIND, WA_STATUS, type CampusOwner } from '../../fixtures/quota';
+import { AUTH_APP, BackOffice, mongo, newCampusOwner, quotaDb, workerLogMentions, WA_KIND, WA_STATUS, type CampusOwner } from '../../fixtures/quota';
 import { addStudent, createSchoolPolicy, familyMobile, pay, personName, q, setupSchool, sql, waitForChallans, waitReceiptProcessed, type Student } from '../../fixtures/fees';
 import { addStaffWithContacts } from '../../fixtures/access-roles';
 import {
@@ -182,6 +182,8 @@ test('AC4: staff invite and resend are refused with the friendly message and cre
   }
   const invites = await mongo(`print((db.getCollectionNames().includes('staffinvites') ? db.staffinvites : db.StaffInvites).countDocuments({ StaffMemberId: ${JSON.stringify(staff.id)} }))`);
   expect(invites).toBe('0');
+  const profile = await (await B.api.get(`staff/${staff.id}/profile`)).json();
+  expect(profile.access).toMatchObject({ invitesOff: true, canInvite: false });
 });
 
 test('AC4: parent invite, resend and regenerate are refused (409, friendly message), status says no code can be issued, nothing is created', async () => {
@@ -195,6 +197,8 @@ test('AC4: parent invite, resend and regenerate are refused (409, friendly messa
   }
   const status = await (await B.api.get(`students/${s2Student.id}/parent-family`)).json();
   expect(status.canIssueCode).toBe(false);
+  expect(status.invitesOff).toBe(true);
+  expect(status.message).toContain(INVITES_OFF);
   expect(await mongo(`print(db.studentfamilylinkinvites.countDocuments({ $or: [{ TenantId: ${JSON.stringify(S2)} }, { StudentId: ${JSON.stringify(s2Student.id)} }] }))`)).toBe('0');
   const waInvites = await mongo(`print(db.scheduledwhatsappmessages.countDocuments({ TenantId: ${JSON.stringify(S2)}, Kind: { $in: [${WA_KIND.StaffInvite}, ${WA_KIND.ParentLinkInvite}] }, Status: { $ne: ${WA_STATUS.Skipped} } }))`);
   expect(waInvites).toBe('0');
@@ -266,19 +270,92 @@ test('AC3: the sample owner\'s welcome email is Skipped SampleTenant; a real (le
   expect((await row(A.userId)).SentAtUtc, 'real campus welcome sent').toBeTruthy();
 });
 
-// Last on purpose: cycle 1 found this open (B1), and a failure here must not stop the serial chain above.
-test('AC7: a sample cannot request a paid WhatsApp top-up (no billing request reaches the back office)', async () => {
+const QUOTA_OFF = "Extra WhatsApp quota isn't available in the sample school.";
+
+test('B2 + sweep: a sample\'s subscription details have no plan or bank; AuthApp context does not fall back to the owner; /subscription/start returns 409', async () => {
+  const details = await (await B.api.get('subscription/details')).json();
+  expect(details).toMatchObject({ status: 'sample', isSample: true });
+  expect(details.plan).toBeNull();
+  expect(details.bankTransfer).toBeNull();
+  expect(details.trialEndsAt).toBeNull();
+
+  const login = await restLogin(A);
+  expect((await restSwitchCampus(login.body.accessToken, S)).status).toBe(200);
+  const auth = await A.authAppSession();
+  try {
+    const ctxRes = await auth.get(`${AUTH_APP}/subscription/context`);
+    const ctxBody = await ctxRes.text();
+    expect(ctxRes.status(), ctxBody).toBe(200);
+    const ctx = JSON.parse(ctxBody);
+    expect(ctx.status, `context must not fall back to the owner's trial: ${ctxBody}`).toBeNull();
+    expect(ctx.trialEndsAt).toBeNull();
+    expect(ctx.daysLeft).toBeNull();
+
+    const start = await auth.post(`${AUTH_APP}/subscription/start`, { data: {} });
+    const startBody = await start.text();
+    expect(start.status(), startBody).toBe(409);
+    expect(startBody).toContain('A sample school has no subscription. Switch to your school to start one.');
+  } finally {
+    await auth.dispose();
+    expect((await restSwitchCampus((await restLogin(A)).body.accessToken, R)).status).toBe(200);
+  }
+
+  const authR = await A.authAppSession();
+  try {
+    const ctxR = await (await authR.get(`${AUTH_APP}/subscription/context`)).json();
+    expect(ctxR.status).toBe('trialing');
+  } finally {
+    await authR.dispose();
+  }
+});
+
+test('AC7 / B1: a sample cannot request a paid WhatsApp top-up (400); planted requests are left out of the back-office queue and approve returns 409; a real campus can still request', async () => {
   const pkg = await ops.newPackage(10, 10, 30);
+  let plantedId: string | undefined;
+  let C: CampusOwner | undefined;
   try {
     const res = await B.api.post('subscription/quota/requests', { data: { packageId: pkg.id } });
     const body = await res.text();
     const queued = (await ops.requests('Requested')).filter((r) => r.tenantId === S2);
     console.log(`[top-up from sample] HTTP ${res.status()} ${body.slice(0, 300)} → back-office requests for S2: ${queued.length}`);
+    expect(res.status(), body).toBe(400);
+    expect(body).toContain(QUOTA_OFF);
     expect(queued, `top-up request from a sample school reached the back office (HTTP ${res.status()})`).toHaveLength(0);
-    expect(res.status()).toBeLessThan(500);
+
+    // Plant a leftover Requested row (as if it had been created before the guard). Ops must still hide it and refuse approve.
+    plantedId = await mongo(`print(db.quotatopuprequests.insertOne({
+      TenantId: ${JSON.stringify(S2)},
+      SubscriptionId: ${JSON.stringify(subS2)},
+      PackageId: ${JSON.stringify(pkg.id)},
+      PackageName: ${JSON.stringify(pkg.name)},
+      Resource: 0, Quantity: ${pkg.quantity}, Price: ${pkg.price}, ValidityDays: ${pkg.validityDays},
+      Status: 0, RequestedByUserId: ${JSON.stringify(B.userId)},
+      CreatedDate: new Date(), CreatedBy: ${JSON.stringify(B.userId)}
+    }).insertedId.toString())`);
+    const stillHidden = (await ops.requests('Requested')).filter((r) => r.tenantId === S2 || r.id === plantedId);
+    expect(stillHidden, 'planted sample request visible in the Requested queue').toHaveLength(0);
+    const approve = await ops.approve(plantedId);
+    const approveBody = await approve.text();
+    expect(approve.status(), approveBody).toBe(409);
+    expect(approveBody).toContain('This request is from a sample school and cannot be approved.');
+
+    C = await newCampusOwner('qa573c');
+    await ops.activate(await quotaDb.subscriptionId(C.tenantId));
+    const real = await C.api.post('subscription/quota/requests', { data: { packageId: pkg.id } });
+    const realBody = await real.text();
+    expect(real.status(), realBody).toBe(201);
+    const realQueued = (await ops.requests('Requested')).filter((r) => r.tenantId === C.tenantId);
+    expect(realQueued).toHaveLength(1);
+    await ops.reject(realQueued[0].id, 'QA573 C2 control cleanup');
   } finally {
-    // Clean up our own throwaway request so later back-office specs see an empty queue.
-    for (const r of (await ops.requests('Requested')).filter((x) => x.tenantId === S2)) await ops.reject(r.id, 'QA573 cleanup').catch(() => undefined);
+    if (plantedId) {
+      await ops.reject(plantedId, 'QA573 C2 planted cleanup').catch(() => undefined);
+      await mongo(`db.quotatopuprequests.deleteOne({ _id: ObjectId(${JSON.stringify(plantedId)}) })`);
+    }
+    for (const r of (await ops.requests('Requested')).filter((x) => x.tenantId === S2 || (C && x.tenantId === C.tenantId))) {
+      await ops.reject(r.id, 'QA573 cleanup').catch(() => undefined);
+    }
     await ops.archivePackage(pkg).catch(() => undefined);
+    await C?.api.dispose();
   }
 });

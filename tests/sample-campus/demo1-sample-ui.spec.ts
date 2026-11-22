@@ -16,7 +16,6 @@ import { addStudent, familyMobile, personName, setupSchool, type Student } from 
 import { addStaffWithContacts } from '../../fixtures/access-roles';
 import { LoginPage } from '../../pages/LoginPage';
 import { StudentsRegisterPage } from '../../pages/StudentsRegisterPage';
-import { SubscriptionQuotaCard } from '../../pages/setup/SubscriptionQuotaCard';
 import {
   INVITES_OFF, SAMPLE_BANNER, SAMPLE_CACHE_MS, addCampus, apiFor, deleteSubscriptionOf, flagSample, restLogin, restSwitchCampus,
 } from '../../fixtures/sample-campus';
@@ -30,6 +29,8 @@ let S: string;
 let N: string;
 let sStudent: Student;
 let sStaffId: string;
+let rStudent: Student;
+let rStaffId: string;
 
 const notice = (page: Page) => page.locator('[data-sample-campus-notice]');
 
@@ -73,6 +74,9 @@ test.beforeAll(async () => {
   test.setTimeout(8 * 60_000);
   A = await newCampusOwner('qa573u');
   R = A.tenantId;
+  const rSchool = await setupSchool(A, 1);
+  rStudent = await addStudent(A, { name: personName('Real'), classId: rSchool.classes[0].id, fatherName: personName('Father'), fatherMobile: familyMobile() });
+  rStaffId = (await addStaffWithContacts(A.api, { first: 'Real', phone: familyMobile(), email: `qa573-ui-real-staff+${Date.now()}@testenv.local` })).id;
   S = await addCampus(A, 'Sample');
   N = await addCampus(A, 'Noplan');
   console.log('[DB SETUP] S and N: delete the signup subscription; S: IsSample = true');
@@ -169,7 +173,7 @@ test('AC10 + AC9: no banner or is_sample on the real campus; switching to the sa
   await page.context().close();
 });
 
-test('AC4: the Parent app drawer on a sample student offers no Copy / Send and issues no code', async ({ browser }) => {
+test('AC4 / B3: the Parent app drawer on a sample student shows the invites-off message and no actions', async ({ browser }) => {
   await makeDefault(S);
   const page = await freshPage(browser);
   await signInToWebApp(page, A);
@@ -177,61 +181,95 @@ test('AC4: the Parent app drawer on a sample student offers no Copy / Send and i
   await register.goto();
   const drawer = await register.openFamilyInviteDrawer({ fullName: sStudent.name, admissionId: sStudent.admissionId });
   await expect(drawer.root.getByText('Not linked', { exact: true })).toBeVisible();
+  await expect(drawer.root.locator('[data-invites-off]')).toContainText(INVITES_OFF);
+  await expect(drawer.root.getByText('No code yet. Send one to the parent on WhatsApp, or copy it.')).toHaveCount(0);
   await expect(drawer.copyButton).toHaveCount(0);
   await expect(drawer.sendWhatsAppButton).toHaveCount(0);
+  await expect(drawer.generateButton).toHaveCount(0);
   await expect(drawer.code).toHaveCount(0);
-  await page.screenshot({ path: evidencePath('pr573-ac4-parent-app-drawer.png') });
+  await page.screenshot({ path: evidencePath('pr573-c2-parent-app-drawer.png') });
   await page.context().close();
 });
 
-test('AC4: the staff "Invite to Marksheet+" dialog shows the friendly refusal', async ({ browser }) => {
+test('AC4 / sweep: the staff App access panel on a sample shows the invites-off message and no Invite, Resend or Revoke', async ({ browser }) => {
   await makeDefault(S);
   const page = await freshPage(browser);
   await signInToWebApp(page, A);
   await page.goto(`/staff/register/${sStaffId}`);
-  const invite = page.getByRole('button', { name: 'Invite to Marksheet+' });
-  await expect(invite).toBeVisible({ timeout: 30_000 });
-  await invite.click();
-  const dialog = page.getByRole('dialog', { name: /Invite .* to Marksheet\+\?/ });
-  await expect(dialog).toBeVisible();
-  await dialog.locator('[data-action="send-invite"]').click();
-  await expect(dialog.locator('[data-invite-error]')).toContainText(INVITES_OFF, { timeout: 15_000 });
-  await page.screenshot({ path: evidencePath('pr573-ac4-staff-invite.png') });
+  const panel = page.locator('[data-staff-card="access"]');
+  await expect(panel).toBeVisible({ timeout: 30_000 });
+  await expect(panel.locator('[data-access-description]')).toHaveText(INVITES_OFF);
+  await expect(panel.locator('[data-action="invite"]')).toHaveCount(0);
+  await expect(panel.locator('[data-action="resend-invite"]')).toHaveCount(0);
+  await expect(panel.locator('[data-action="revoke-invite"]')).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Invite to Marksheet+' })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Resend' })).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: 'Revoke invite' })).toHaveCount(0);
+  await page.screenshot({ path: evidencePath('pr573-c2-staff-app-access.png') });
   await page.context().close();
 });
 
-test('AC7: the sample\'s Subscription page shows no WhatsApp quota and no way to request more; no quota notice in the shell', async ({ browser }) => {
-  await makeDefault(S);
-  const page = await freshPage(browser);
-  await signInToWebApp(page, A);
-  const card = new SubscriptionQuotaCard(page);
-  await card.open();
-  await expect(card.card).toContainText('WhatsApp notifications are not available');
-  await expect(card.card.locator('[data-quota-stats]')).toHaveCount(0);
-  await expect(card.requestButton()).toHaveCount(0);
-  await expect(page.locator('[data-whatsapp-quota-notice]')).toHaveCount(0);
-  await page.context().close();
-});
-
-// Last on purpose: cycle 1 found these open (B2, B3). Soft assertions so both are reported; a failure here does not
-// stop the serial chain above.
-test('Known gaps: the sample shows no billing details (B2) and the Parent app drawer explains why there is no code (B3)', async ({ browser }) => {
+test('AC7: the sample\'s Subscription page has no WhatsApp quota card and no way to request more; no quota notice in the shell', async ({ browser }) => {
   await makeDefault(S);
   const page = await freshPage(browser);
   await signInToWebApp(page, A);
   await page.goto('/setup/subscription');
   await expect(page.getByRole('heading', { name: 'Subscription', level: 1 })).toBeVisible({ timeout: 30_000 });
-  await page.waitForTimeout(3_000);
-  await page.screenshot({ path: evidencePath('pr573-b2-sample-subscription-page.png'), fullPage: true });
+  // After the B2 fix the page renders only the Sample school card — the quota card is not mounted at all.
+  await expect(page.locator('[data-subscription-sample]')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('[data-quota-card]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /request more/i })).toHaveCount(0);
+  await expect(page.locator('[data-whatsapp-quota-notice]')).toHaveCount(0);
+  await page.context().close();
+});
+
+test('B2: the sample Subscription page shows a Sample school card with no plan or bank details, and the dashboard has no trial banner', async ({ browser }) => {
+  await makeDefault(S);
+  const page = await freshPage(browser);
+  await signInToWebApp(page, A);
+  await page.goto('/setup/subscription');
+  await expect(page.getByRole('heading', { name: 'Subscription', level: 1 })).toBeVisible({ timeout: 30_000 });
+  const sampleCard = page.locator('[data-subscription-sample]');
+  await expect(sampleCard).toBeVisible({ timeout: 30_000 });
+  await expect(sampleCard.getByRole('heading', { name: 'Sample school' })).toBeVisible();
+  await expect(sampleCard.getByText('Practice', { exact: true })).toBeVisible();
+  await expect(sampleCard.locator('[data-subscription-sample-note]')).toContainText("This is a practice school. It has no subscription, nothing here is billed, and extra WhatsApp quota can't be requested.");
   const main = page.getByRole('main');
-  await expect.soft(main.getByText('How to pay by bank transfer'), 'B2: bank-transfer payment details on the sample').toHaveCount(0);
-  await expect.soft(main.getByText(/free trial/i).first(), 'B2: the owner\'s trial plan on the sample').toHaveCount(0);
+  await expect(main.locator('[data-subscription-bank]')).toHaveCount(0);
+  await expect(main.getByText('How to pay by bank transfer')).toHaveCount(0);
+  await expect(main.getByText(/free trial/i)).toHaveCount(0);
+  await page.screenshot({ path: evidencePath('pr573-c2-sample-subscription-page.png'), fullPage: true });
+
+  await page.goto('/');
+  await expect(page.getByRole('main')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/Your free trial ends/i)).toHaveCount(0);
+  await expect(page.getByText('Pay by bank transfer to keep access for your school.')).toHaveCount(0);
+  await page.screenshot({ path: evidencePath('pr573-c2-sample-dashboard.png') });
+  await page.context().close();
+});
+
+test('Control: a real campus still shows its plan, and invites still work on the Parent app drawer and staff App access panel', async ({ browser }) => {
+  await makeDefault(R);
+  const page = await freshPage(browser);
+  await signInToWebApp(page, A);
+  await page.goto('/setup/subscription');
+  await expect(page.getByRole('heading', { name: 'Subscription', level: 1 })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('[data-subscription-sample]')).toHaveCount(0);
+  await expect(page.getByText(/free trial/i).first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('[data-subscription-bank]')).toBeVisible();
+  await page.screenshot({ path: evidencePath('pr573-c2-real-subscription-page.png'), fullPage: true });
+
+  await page.goto(`/staff/register/${rStaffId}`);
+  const panel = page.locator('[data-staff-card="access"]');
+  await expect(panel).toBeVisible({ timeout: 30_000 });
+  await expect(panel.getByRole('button', { name: 'Invite to Marksheet+' })).toBeVisible();
+  await expect(panel.locator('[data-access-description]')).not.toHaveText(INVITES_OFF);
 
   const register = new StudentsRegisterPage(page);
   await register.goto();
-  const drawer = await register.openFamilyInviteDrawer({ fullName: sStudent.name, admissionId: sStudent.admissionId });
-  await page.screenshot({ path: evidencePath('pr573-b3-parent-app-drawer.png') });
-  await expect.soft(drawer.root.getByText(INVITES_OFF), 'B3: friendly refusal in the Parent app drawer').toBeVisible({ timeout: 10_000 });
-  await expect.soft(drawer.root.getByText('No code yet. Send one to the parent on WhatsApp, or copy it.'), 'B3: drawer tells the user to send/copy with no buttons').toHaveCount(0);
+  const drawer = await register.openFamilyInviteDrawer({ fullName: rStudent.name, admissionId: rStudent.admissionId });
+  await expect(drawer.root.locator('[data-invites-off]')).toHaveCount(0);
+  await expect(drawer.copyButton).toBeVisible({ timeout: 15_000 });
+  await page.screenshot({ path: evidencePath('pr573-c2-real-invites.png') });
   await page.context().close();
 });
