@@ -19,7 +19,7 @@ import {
   createFamilyParent,
   ownChildren,
   seedStudent,
-  waitForInviteWhatsApp,
+  waitUntilInviteProjected,
   type FreshParent,
   type SeededStudent,
 } from '../../fixtures/devenv';
@@ -62,8 +62,9 @@ const test = base.extend<{ parentPage: Page }>({
 async function issueCode(adminPage: Page, student: SeededStudent): Promise<string> {
   const register = new StudentsRegisterPage(adminPage);
   await register.goto();
+  // Copy code issues a live redeemable code without a WhatsApp send (PR 571, code-only).
   const code = await (await register.openFamilyInviteDrawer(student)).generate();
-  await waitForInviteWhatsApp(code);
+  await waitUntilInviteProjected(student.id);
   return code;
 }
 
@@ -90,10 +91,10 @@ test.describe('Linking an invite to an existing child (ut7, AC5–AC7)', () => {
     await expect(join.attachChoice()).toBeVisible();
     await expect(join.existingChildOption(own.name)).toBeChecked();
     await expect(join.suggestedChildOption()).toHaveCount(1);
-    await expect(join.suggestedChildOption()).toHaveAccessibleName(new RegExp(`^Yes, this is ${own.name} \\(suggested\\)$`, 'i'));
+    await expect(join.suggestedChildOption()).toHaveAccessibleName(new RegExp(`^Same child as ${own.name} \\(best match\\)$`, 'i'));
     // N3 (cycle 3): names are title-cased on the card, exactly (case-sensitive).
-    await expect(join.suggestedChildOption()).toHaveAccessibleName(`Yes, this is ${titleCase(own.name)} (suggested)`);
-    await expect(join.existingChildOption(sibling.name)).toHaveAccessibleName(`Yes, this is ${titleCase(sibling.name)}`);
+    await expect(join.suggestedChildOption()).toHaveAccessibleName(`Same child as ${titleCase(own.name)} (best match)`);
+    await expect(join.existingChildOption(sibling.name)).toHaveAccessibleName(`Same child as ${titleCase(sibling.name)}`);
     await expect(join.existingChildOption(sibling.name)).not.toBeChecked();
     await expect(join.newChildOption()).toBeVisible();
     await expect(join.newChildOption()).not.toBeChecked();
@@ -148,8 +149,9 @@ test.describe('Linking an invite to an existing child (ut7, AC5–AC7)', () => {
 
     await join.connect();
 
+    await expect(parentPage).toHaveURL(/\/children\/[^/]+/, { timeout: 30_000 });
     const dashboard = new FamilyDashboardPage(parentPage);
-    await dashboard.expectLoaded();
+    await dashboard.goto();
     await expect(dashboard.child(student.fullName)).toHaveCount(1);
     await expect(dashboard.childSchoolLine(student.fullName)).toContainText('Testenv High School - Main');
     expect((await ownChildren(freshParent)).length).toBe(before);
@@ -157,7 +159,8 @@ test.describe('Linking an invite to an existing child (ut7, AC5–AC7)', () => {
 
     const register = new StudentsRegisterPage(adminPage);
     await register.goto();
-    await expect.poll(() => register.rowActionNames(student), { timeout: 45_000 }).not.toContain('Family invite code');
+    await expect.poll(async () => (await register.rowActionNames(student)).includes('Parent app'), { timeout: 45_000 }).toBeTruthy();
+    await expect.poll(async () => (await register.rowActionNames(student)), { timeout: 5_000 }).not.toEqual(expect.arrayContaining(['Link parent', 'Invite code', 'Family invite code']));
   });
 
   test('the parent can pick a child other than the suggested one, and that child is linked (AC6/AC7)', async ({ freshParent, parentPage, adminPage }) => {
@@ -172,8 +175,9 @@ test.describe('Linking an invite to an existing child (ut7, AC5–AC7)', () => {
     await join.chooseExistingChild(chosen.name);
     await join.connect();
 
+    await expect(parentPage).toHaveURL(/\/children\/[^/]+/, { timeout: 30_000 });
     const dashboard = new FamilyDashboardPage(parentPage);
-    await dashboard.expectLoaded();
+    await dashboard.goto();
     await expect(dashboard.childSchoolLine(chosen.name)).toContainText('Testenv High School - Main');
     await expect(dashboard.childSchoolLine(`${first} Probe`)).toContainText('Not connected to a school yet');
   });
@@ -191,8 +195,8 @@ test.describe('Linking an invite to an existing child (ut7, AC5–AC7)', () => {
     await join.chooseNewChild();
     await join.connect();
 
+    await expect(parentPage).toHaveURL(/\/children\/[^/]+/, { timeout: 30_000 });
     const dashboard = new FamilyDashboardPage(parentPage);
-    await dashboard.expectLoaded();
     // Same full name twice: the parent's own (unconnected) child and the new school-linked one.
     // A just-linked new child shows as "Child" until the school's profile snapshot is projected
     // (outbox relay, a few seconds), and the dashboard does not refresh itself.
@@ -210,7 +214,7 @@ test.describe('Linking an invite to an existing child (ut7, AC5–AC7)', () => {
     const join = new JoinWithCodePage(parentPage);
     await join.goto(bare(await issueCode(adminPage, firstStudent)));
     await join.connect();
-    await new FamilyDashboardPage(parentPage).expectLoaded();
+    await expect(parentPage).toHaveURL(/\/children\/[^/]+/, { timeout: 30_000 });
 
     const twin = await seedStudent({ firstName: first, lastName: 'Probe', dateOfBirth: '2016-05-05', parentPhone: freshParent.phone });
     await join.goto(bare(await issueCode(adminPage, twin)));
@@ -312,8 +316,9 @@ test.describe('Linking an invite to an existing child (ut7, AC5–AC7)', () => {
 
     await join.connectButton.dblclick();
 
+    await expect(parentPage).toHaveURL(/\/children\/[^/]+/, { timeout: 30_000 });
     const dashboard = new FamilyDashboardPage(parentPage);
-    await dashboard.expectLoaded();
+    await dashboard.goto();
     await expect(dashboard.child(student.fullName)).toHaveCount(1);
     expect(accepts.every((s) => s === 200)).toBe(true);
     expect((await ownChildren(freshParent)).length).toBe(before);

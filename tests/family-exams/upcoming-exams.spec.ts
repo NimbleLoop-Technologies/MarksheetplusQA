@@ -17,7 +17,7 @@ import { test, expect, type Browser, type Page } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { newCampusOwner, type CampusOwner } from '../../fixtures/campus-owner';
-import { callFamilyApi, createFamilyParent, type FreshParent } from '../../fixtures/devenv';
+import { callFamilyApi, createFamilyParent, waitUntilInviteProjected, type FreshParent } from '../../fixtures/devenv';
 import { LoginPage } from '../../pages/LoginPage';
 import { FamilyDashboardPage } from '../../pages/family/FamilyDashboardPage';
 import * as f from '../../fixtures/fees';
@@ -127,15 +127,13 @@ async function termIdFor(owner: CampusOwner): Promise<{ sessionId: string; term1
 }
 
 async function link(owner: CampusOwner, parent: FreshParent, studentId: string): Promise<void> {
-  const sent = await f.ok(await owner.api.post(`students/${studentId}/parent-family/invite`), `invite ${studentId}`);
+  const sent = await f.ok(await owner.api.post(`students/${studentId}/parent-family/invite`, { data: { sendWhatsApp: false } }), `invite ${studentId}`);
   expect(sent.code, `invite code for ${studentId}: ${JSON.stringify(sent)}`).toBeTruthy();
-  let redeem = { status: 0, body: '' };
-  await expect(async () => {
-    redeem = await callFamilyApi(parent, 'POST', '/family/link-invites/redeem', { code: sent.code });
-    expect(redeem.status, `redeem: ${redeem.body}`).toBe(200);
-  }).toPass({ timeout: 60_000, intervals: [2_000] });
+  await waitUntilInviteProjected(studentId);
+  const redeem = await callFamilyApi(parent, 'POST', '/family/link-invites/redeem', { code: sent.code });
+  expect(redeem.status, `redeem: ${redeem.body}`).toBe(200);
   const inviteId = JSON.parse(redeem.body).inviteId as string;
-  const accept = await callFamilyApi(parent, 'POST', `/family/link-invites/${inviteId}/accept`, { childId: null, token: null });
+  const accept = await callFamilyApi(parent, 'POST', `/family/link-invites/${inviteId}/accept`, { childId: null, token: sent.code });
   expect(accept.status, `accept: ${accept.body}`).toBe(200);
   // The datesheet consumer only projects to students the school already marks Linked.
   await expect(async () => {

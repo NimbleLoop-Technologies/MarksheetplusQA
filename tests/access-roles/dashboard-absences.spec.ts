@@ -234,13 +234,13 @@ test.describe('PR 564 dashboard absentee leak fix (CU-z94x8ee9rn)', () => {
 
     const child = kids.find(k => k.name.startsWith('Alia'))!;
     childId = child.id;
-    const sent = await f.ok(await owner.api.post(`students/${child.id}/parent-family/invite`), 'invite');
+    const sent = await f.ok(await owner.api.post(`students/${child.id}/parent-family/invite`, { data: { sendWhatsApp: false } }), 'invite');
     let redeem = { status: 0, body: '' };
     await expect(async () => {
       redeem = await callFamilyApi(parent, 'POST', '/family/link-invites/redeem', { code: sent.code });
       expect(redeem.status, redeem.body).toBe(200);
     }).toPass({ timeout: 60_000, intervals: [2_000] });
-    const accept = await callFamilyApi(parent, 'POST', `/family/link-invites/${JSON.parse(redeem.body).inviteId}/accept`, { childId: null, token: null });
+    const accept = await callFamilyApi(parent, 'POST', `/family/link-invites/${JSON.parse(redeem.body).inviteId}/accept`, { childId: null, token: sent.code });
     expect(accept.status, accept.body).toBe(200);
     await expect(async () => {
       const st = await f.ok(await owner.api.get(`students/${child.id}/parent-family`), 'link');

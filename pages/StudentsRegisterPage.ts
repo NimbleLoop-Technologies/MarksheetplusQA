@@ -68,7 +68,7 @@ export class StudentsRegisterPage {
     await this.find(student);
     await expect(async () => {
       await this.openActions(student);
-      await this.actionsMenu(student).getByRole('menuitem', { name: 'Family invite code' }).click({ timeout: 2_000 });
+      await this.actionsMenu(student).getByRole('menuitem', { name: 'Parent app' }).click({ timeout: 2_000 });
     }).toPass({ timeout: 20_000 });
     const drawer = new FamilyInviteCodeDrawer(this.page);
     await drawer.expectLoaded(student.fullName);

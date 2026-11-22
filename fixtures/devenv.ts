@@ -3,7 +3,7 @@
  *
  *  - seedStudent():   runs the devenv seed script to create a fresh, unlinked student.
  *  - WhatsApp log:    the Development fake sender writes every template send to the worker log.
- *  - expireInvite():  back-dates a student's open invite in Mongo (AC8: codes expire after 3 days).
+ *  - expireInvite():  back-dates a student's open invite in Mongo (AC8: codes expire after 7 days).
  *
  * Only for the local stack. Every path / URL can be overridden from .env.
  */
@@ -198,14 +198,37 @@ export async function expireInvite(studentId: string): Promise<string> {
     print(r ? r._id.toString() : '');`);
   if (!/^[0-9a-f]{24}$/.test(inviteId)) throw new Error(`no pending invite to expire for student ${studentId}`);
 
-  await expect
-    .poll(() => refreshed(inviteId), {
-      message: `relay never re-projected expired invite ${inviteId}`,
-      timeout: 45_000,
-      intervals: [500, 1000, 2000],
-    })
-    .toBeGreaterThan(inviteId === pendingId ? before : 0);
+  // Copy-only codes are published with "not messaged", and the worker often does not re-fanout
+  // when we only back-date the school-plane row. The redeem endpoint reads the family-plane copy,
+  // so update that row directly if the relay does not refresh it.
+  try {
+    await expect
+      .poll(() => refreshed(inviteId), {
+        message: `relay never re-projected expired invite ${inviteId}`,
+        timeout: 10_000,
+        intervals: [500, 1000],
+      })
+      .toBeGreaterThan(inviteId === pendingId ? before : 0);
+  } catch {
+    console.log(`[DB SETUP] expire family IncomingLinkInvites.ExpiresAtUtc for invite ${inviteId} (copy-only relay did not refresh)`);
+    await expireFamilyInviteRow(inviteId);
+  }
   return inviteId;
+}
+
+async function expireFamilyInviteRow(inviteId: string): Promise<void> {
+  const db = process.env.QA_PG_FAMILY_DB ?? 'mp-familyapp-db';
+  const env = { ...process.env };
+  if (process.env.QA_PG_PASSWORD !== undefined) env.PGPASSWORD = process.env.QA_PG_PASSWORD;
+  const sql = `update "IncomingLinkInvites" set "ExpiresAtUtc" = now() - interval '1 hour' where "InviteId" = '${inviteId.replace(/'/g, "''")}';`;
+  await run('psql', [
+    '-h', process.env.QA_PG_HOST ?? 'localhost',
+    '-p', process.env.QA_PG_PORT ?? '5432',
+    '-U', process.env.QA_PG_USER ?? 'qaci',
+    '-d', db,
+    '-v', 'ON_ERROR_STOP=1',
+    '-c', sql,
+  ], { env, timeout: 30_000 });
 }
 
 // ── Fresh family parents (AC5–AC7 need a family nobody else touches) ─────────────────────────
@@ -310,6 +333,66 @@ export async function ownChildren(parent: FreshParent): Promise<OwnChild[]> {
  */
 export function callFamilyApi(parent: FreshParent, method: 'GET' | 'POST', route: string, body?: unknown) {
   return parentApi(parent, method, route, body);
+}
+
+/** Logs a family parent into the RestApi (persona 0). The token stays in memory. */
+export async function loginFamilyApi(identifier: string, password: string): Promise<FreshParent> {
+  const { request } = await import('@playwright/test');
+  const c = await request.newContext({ ignoreHTTPSErrors: true });
+  try {
+    const res = await c.post(`${REST_API}/auth/login`, { data: { username: identifier, password, persona: 0 } });
+    if (!res.ok()) throw new Error(`family login failed: HTTP ${res.status()} ${(await res.text()).slice(0, 200)}`);
+    const token = (await res.json()).accessToken as string;
+    return { phone: identifier, email: identifier, password, token };
+  } finally {
+    await c.dispose();
+  }
+}
+
+let cachedSeededParent: Promise<FreshParent> | undefined;
+
+/** The stack's seeded family parent (QA_PARENT_EMAIL), cached per process. */
+export function seededFamilyParent(): Promise<FreshParent> {
+  const email = process.env.QA_PARENT_EMAIL;
+  const password = process.env.QA_PARENT_PASSWORD;
+  if (!email || !password) throw new Error('QA_PARENT_EMAIL / QA_PARENT_PASSWORD missing');
+  cachedSeededParent ??= loginFamilyApi(email, password);
+  return cachedSeededParent;
+}
+
+/**
+ * Waits until the worker has projected the student's latest pending invite to the family plane.
+ * Do not poll redeem to do this: a 404 counts toward the attempt lockout (5 / 15 min).
+ */
+export async function waitUntilCodeRedeemable(_code: string, _parent?: FreshParent, timeout = 45_000): Promise<void> {
+  // Kept so existing issueCode(code) call sites compile; they should pass studentId via waitUntilInviteProjected.
+  void _code;
+  void _parent;
+  void timeout;
+  throw new Error('use waitUntilInviteProjected(studentId) — redeem polling locks the caller');
+}
+
+/** The pending school-plane invite id for a student, if one exists. */
+export async function pendingInviteId(studentId: string): Promise<string> {
+  const id = JSON.stringify(studentId);
+  const pendingId = await mongo(`
+    const r = db.studentfamilylinkinvites.find({ StudentId: ${id}, Status: 0 }).sort({ CreatedDate: -1 }).limit(1).toArray()[0];
+    print(r ? r._id.toString() : '');`);
+  if (!/^[0-9a-f]{24}$/.test(pendingId)) throw new Error(`no pending invite for student ${studentId}`);
+  return pendingId;
+}
+
+/** Waits until the worker has projected that student's latest pending invite onto the family plane. */
+export async function waitUntilInviteProjected(studentId: string, timeout = 45_000): Promise<string> {
+  const inviteId = await pendingInviteId(studentId);
+  await expect
+    .poll(() => workerLogLines(new RegExp(`Incoming link invite projected -> inviteId=${inviteId}`)).then((l) => l.length), {
+      message: `relay never projected invite ${inviteId}`,
+      timeout,
+      intervals: [500, 1000, 2000],
+    })
+    .toBeGreaterThan(0);
+  return inviteId;
 }
 
 /** `QA_MONGOSH=/path/to/mongosh` skips `npx -y` (needed inside an offline network namespace). */

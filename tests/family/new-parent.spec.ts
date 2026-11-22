@@ -7,7 +7,7 @@
  */
 import type { BrowserContext, Page } from '@playwright/test';
 import { test, expect } from '../../fixtures/family';
-import { seedStudent, uniquePakistaniMobile, waitForInviteWhatsApp, type SeededStudent } from '../../fixtures/devenv';
+import { seedStudent, uniquePakistaniMobile, waitUntilInviteProjected, type SeededStudent } from '../../fixtures/devenv';
 import { uniqueSuffix } from '../../fixtures/test-data';
 import { StudentsRegisterPage } from '../../pages/StudentsRegisterPage';
 import { LoginPage } from '../../pages/LoginPage';
@@ -25,8 +25,9 @@ const bare = (code: string) => code.replace('-', '');
 async function issueCode(adminPage: Page, student: SeededStudent): Promise<string> {
   const register = new StudentsRegisterPage(adminPage);
   await register.goto();
+  // Copy code issues a live redeemable code without a WhatsApp send (PR 571, code-only).
   const code = await (await register.openFamilyInviteDrawer(student)).generate();
-  await waitForInviteWhatsApp(code);
+  await waitUntilInviteProjected(student.id);
   return code;
 }
 
@@ -76,8 +77,9 @@ test.describe('Invite codes for a parent without an account', () => {
     await expect(join.cardValue('Child')).toHaveText(student.firstName);
     await join.connect();
 
+    await expect(page).toHaveURL(/\/children\/[^/]+/, { timeout: 30_000 });
     const dashboard = new FamilyDashboardPage(page);
-    await dashboard.expectLoaded();
+    await dashboard.goto();
     await expect(dashboard.child(student.fullName)).toHaveCount(1);
   });
 

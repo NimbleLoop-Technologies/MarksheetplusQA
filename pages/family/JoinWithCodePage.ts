@@ -85,27 +85,26 @@ export class JoinWithCodePage {
 
   /**
    * The option to link the invite to the parent's existing child `childName`. The label is
-   * "Yes, this is <name>" with " (suggested)" for a lookalike. Names are matched case-insensitively:
-   * the family plane stores names lower-cased and the label shows them as stored.
+   * "Same child as <name>" with " (best match)" for a lookalike (PR 571). Names are matched case-insensitively.
    */
   existingChildOption(childName: string): Locator {
     const escaped = childName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return this.main.getByRole('radio', { name: new RegExp(`^Yes, this is ${escaped}( \\(suggested\\))?$`, 'i') });
+    return this.main.getByRole('radio', { name: new RegExp(`^Same child as ${escaped}( \\(best match\\))?$`, 'i') });
   }
 
-  /** Every "Yes, this is …" option, i.e. the children offered for linking. */
+  /** Every "Same child as …" option, i.e. the children offered for linking. */
   existingChildOptions(): Locator {
-    return this.main.getByRole('radio', { name: /^Yes, this is / });
+    return this.main.getByRole('radio', { name: /^Same child as / });
   }
 
-  /** The option marked "(suggested)", if any. */
+  /** The option marked "(best match)", if any. */
   suggestedChildOption(): Locator {
-    return this.main.getByRole('radio', { name: /\(suggested\)$/ });
+    return this.main.getByRole('radio', { name: /\(best match\)$/ });
   }
 
-  /** "No, add <First> as a new child" (always offered when the radio group is shown). */
+  /** "Add as a new child" (always offered when the radio group is shown). */
   newChildOption(): Locator {
-    return this.main.getByRole('radio', { name: /^No, add .+ as a new child$/ });
+    return this.main.getByRole('radio', { name: /^Add as a new child$/ });
   }
 
   async chooseExistingChild(childName: string) {
