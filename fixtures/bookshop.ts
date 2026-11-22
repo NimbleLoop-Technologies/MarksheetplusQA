@@ -6,6 +6,8 @@ import { randomUUID } from 'node:crypto';
 import { expect, type APIResponse } from '@playwright/test';
 import type { CampusOwner } from './campus-owner';
 import { letters, ok, sql, sqlQuote as q } from './fees';
+import { openPosDay, pktDate } from './pos-day';
+export { pktDate, pktMidnightUtc, openPosDay } from './pos-day';
 
 export const REASONS = ['Opening Stock', 'Purchase Receipt', 'Return from Student', 'Sale', 'Return to Supplier', 'Damage', 'Loss', 'Stock Correction'] as const;
 export type Reason = (typeof REASONS)[number];
@@ -79,7 +81,7 @@ export async function movement(owner: CampusOwner, itemId: string, o: Parameters
 
 /** A real cash sale at the point of sale (opens today's POS day if needed). */
 export async function cashSale(owner: CampusOwner, itemId: string, quantity = 1, variantId: string | null = null): Promise<void> {
-  const day = await owner.api.post('bookshop/point-of-sale/day', { data: { openingFloat: 0 } });
+  const day = await openPosDay(owner.api, 0);
   expect(day.status(), `open POS day: ${await day.text()}`).toBeLessThan(500);
   await ok(
     await owner.api.post('bookshop/point-of-sale/sales', {
@@ -126,13 +128,6 @@ export function parseCsv(text: string): string[][] {
 }
 
 // ── Return / Replace a Sale (PR 552: ClickUp 86extv6fx Replace an Item or Kit, 86extv6a8 Return a Sale) ─────────
-
-/** Pakistan (operational) calendar date `days` before today: the server dates replacements and returns by PKT. */
-export const pktDate = (daysAgo = 0) => {
-  const d = new Date(Date.now() + 5 * 3600_000);
-  d.setUTCDate(d.getUTCDate() - daysAgo);
-  return d.toISOString().slice(0, 10);
-};
 
 /** A single item with an explicit cost and price (profit = price - cost). */
 export async function createPricedItem(owner: CampusOwner, o: { name: string; price: number; cost: number; stock?: number; category?: string }): Promise<Item> {

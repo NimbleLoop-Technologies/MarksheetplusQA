@@ -4,6 +4,7 @@
  */
 import { randomInt, randomUUID } from 'node:crypto';
 import { expect, request as pwRequest, type APIRequestContext } from '@playwright/test';
+import { openPosDay } from './pos-day';
 
 export const REST_API = process.env.QA_REST_API_URL ?? 'https://localhost:7244';
 export const letters = (n: number) => Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz'[randomInt(26)]).join('');
@@ -73,7 +74,7 @@ export async function stockedItem(api: APIRequestContext, price = 300): Promise<
   });
   expect(res.status(), `create item ${name}: ${await res.text()}`).toBeLessThan(300);
   const body = await res.json();
-  const day = await api.post('bookshop/point-of-sale/day', { data: { openingFloat: 0 } });
+  const day = await openPosDay(api, 0);
   expect(day.status(), `open POS day: ${await day.text()}`).toBeLessThan(500);
   return { id: (body.item ?? body).id, name, sku };
 }
