@@ -195,7 +195,18 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
     },
     {
+      // PR 576 (CU-z94x8eee57) school-app logout must revoke this client's tokens and show the login form.
+      // Self-seeding throwaway campus owners; live tokens, no mocks. Local stack only, serial.
+      name: 'auth',
+      testDir: './tests/auth',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 5 * 60_000,
+      use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
+    },
+    {
       name: 'family-setup',
+
       testDir: './fixtures',
       testMatch: /.*\.family-setup\.ts/,
       retries: 0,
