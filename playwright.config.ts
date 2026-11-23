@@ -217,6 +217,18 @@ export default defineConfig({
       use: { ...devices['Desktop Firefox'], timezoneId: 'Asia/Karachi', permissions: [], serviceWorkers: 'block' },
     },
     {
+      // PR 578 (CU-z94x8eefv5, CU-z94x8eeg1z) Fee Payment: a part-paid overdue row shows Partly paid + Overdue and answers both filters;
+      // a per-student school titles the first tile "Students with dues" and counts students. Two self-seeding campuses
+      // (student and family mode) and the Worker scheduler. Local stack only, serial.
+      name: 'fee-dues',
+      testDir: './tests/fee-dues',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 14 * 60_000,
+      expect: { timeout: 15_000 },
+      use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
+    },
+    {
       // PR 576 (CU-z94x8eee57) school-app logout must revoke this client's tokens and show the login form.
       // Self-seeding throwaway campus owners; live tokens, no mocks. Local stack only, serial.
       name: 'auth',
