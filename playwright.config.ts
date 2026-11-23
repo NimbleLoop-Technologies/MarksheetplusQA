@@ -93,6 +93,8 @@ export default defineConfig({
       // owner (local stack only): a tenant has one run per month and only the current month.
       name: 'payroll',
       testDir: './tests/authenticated/payroll',
+      // PR 581 specs have their own project below (pr581-one-off).
+      testIgnore: /pr581-.*\.spec\.ts/,
       retries: 0,
       fullyParallel: false,
       timeout: 3 * 60_000,
@@ -246,6 +248,18 @@ export default defineConfig({
       fullyParallel: false,
       retries: 0,
       timeout: 6 * 60_000,
+      use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
+    },
+    {
+      // PR 581 (CU-z94x8eeerp) one-off Type is an inline radio group; action buttons sit below Reason with a gap.
+      // Self-seeding throwaway campus (fixtures/payroll.ts). Layout at 1280/390, keyboard, submit each type,
+      // and a published-run adjustment post smoke. Local stack only, serial.
+      name: 'pr581-one-off',
+      testDir: './tests/authenticated/payroll',
+      testMatch: /pr581-.*\.spec\.ts/,
+      retries: 0,
+      fullyParallel: false,
+      timeout: 3 * 60_000,
       use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
     },
     {
