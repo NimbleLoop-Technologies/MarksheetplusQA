@@ -96,8 +96,8 @@ test('AC3 pending list: one row per student, named by the student, amounts from 
     expect(row.challanNumber).toBe(challanOf(s).number);
   }
   expect(page.summary.amountOutstanding).toBe(5500);
-  // 4 student rows from 2 families: the summary counts families (z94x8ecuum).
-  expect(page.summary.pendingChallans).toBe(2);
+  // 4 student rows from 2 families: since PR 578 (CU-z94x8eeg1z) a per-student school counts students with dues, not families.
+  expect(page.summary.pendingChallans).toBe(4);
 });
 
 test('AC3 scoped outstanding: ?challanId= is that student only; the family read lists each student challan', async () => {

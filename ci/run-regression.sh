@@ -340,13 +340,15 @@ has_feature() { # has_feature <project>
 		auth) grep -rqsF "forceLogin" "$SRC" --include=*.cs --include=*.razor ;;
 		# PR 579 (exam paper part messages, CU-z94x8e8qw2): the part drawer's own missing-marks sentence.
 		exam-papers) grep -rqsF "Enter marks greater than 0." "$SRC" --include=*.cs ;;
+		# PR 578 (fee dues badges and tiles, CU-z94x8eefv5 / CU-z94x8eeg1z): the per-student Dues tile title.
+		fee-dues) grep -rqsF "STUDENTS_WITH_DUES" "$SRC" --include=*.cs ;;
 		*) return 0 ;;
 	esac
 }
 if [[ "$QA_CI_SUITES" == auto ]]; then
 	SUITES=()
 	# challan-name waits on the 1-minute fee scheduler (~12 min per file) and must run at --workers=1.
-	for p in setup anonymous authenticated shell-notes whatsapp-quota whatsapp-receipts challan-name attendance-backdating payroll ui-migration family-fees bookshop family-exams access-roles math-editor math-editor-firefox auth exam-papers family-setup family; do
+	for p in setup anonymous authenticated shell-notes whatsapp-quota whatsapp-receipts challan-name attendance-backdating payroll ui-migration family-fees bookshop family-exams access-roles math-editor math-editor-firefox auth fee-dues exam-papers family-setup family; do
 		if has_feature "$p"; then SUITES+=("$p"); else warn "skipping project $p: this MarksheetPlus checkout does not contain its feature yet"; fi
 	done
 else

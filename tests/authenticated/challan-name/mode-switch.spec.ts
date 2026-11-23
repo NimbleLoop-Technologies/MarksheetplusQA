@@ -288,23 +288,23 @@ test('C2 a payment on a student challan is acknowledged and receipted under the 
   expect.soft(api.familyName.toLowerCase(), 'receipt payer is the student').toContain(charlie.name.split(' ')[0].toLowerCase());
 });
 
-test('C3 Fee Payment "Families with dues" counts families, not student rows, in a per-student school', async ({ page }) => {
+test('C3 Fee Payment "Students with dues" counts student rows in a per-student school (CU-z94x8eeg1z, PR 578)', async ({ page }) => {
+  // PR 578 changed the rule: a school that bills per student titles the first tile "Students with dues" and counts one per
+  // student row (a family's leftover family challan counts once, as its row does); the Overdue tile says "N students".
   await signInToWebApp(page, owner.credentials());
   const list = new FeePaymentPage(page);
   await list.open();
-  const families = new Set((await f.pending(owner.api)).items.map((i) => i.familyId)).size;
-  await page.screenshot({ path: `${EV}/C3-families-with-dues-tile.png` });
-  await expect(list.tile('Families with dues')).toContainText(String(families));
-  // z94x8ecuum: the Overdue tile ("N families") counts distinct overdue families too.
   const pending = await f.pending(owner.api);
-  const overdueFamilies = new Set(pending.items.filter((i: any) => /overdue/i.test(String(i.status ?? ''))).map((i) => i.familyId)).size;
-  console.log(`C3 summary=${JSON.stringify(pending.summary)} distinctFamilies=${families} overdueFamilies=${overdueFamilies} rows=${pending.items.length}`);
-  // The summary keeps its field names (pendingChallans, overdueChallans) but now carries family counts.
-  expect.soft(pending.summary.pendingChallans, 'API summary families with dues').toBe(families);
-  expect.soft(pending.summary.overdueChallans, 'API summary overdue families').toBe(overdueFamilies);
-  // 'Overdue' is also a status option and a row badge, so the tile is read by its data-tile hook.
-  await expect(page.locator('[data-tile="overdue"]')).toContainText(new RegExp(`\\b${overdueFamilies} famil`));
-  await page.screenshot({ path: `${EV}/C3-tiles-overdue-families.png` });
+  const rows = pending.items.length;
+  const overdueRows = pending.items.filter((i: any) => /overdue/i.test(String(i.status ?? ''))).length;
+  console.log(`C3 summary=${JSON.stringify(pending.summary)} rows=${rows} overdueRows=${overdueRows}`);
+  await page.screenshot({ path: `${EV}/C3-students-with-dues-tile.png` });
+  await expect(page.locator('[data-tile="families"]')).toContainText('Students with dues');
+  await expect(page.locator('[data-tile="families"]')).toContainText(String(rows));
+  expect.soft(pending.summary.pendingChallans, 'API summary rows with dues').toBe(rows);
+  expect.soft(pending.summary.overdueChallans, 'API summary overdue rows').toBe(overdueRows);
+  await expect(page.locator('[data-tile="overdue"]')).toContainText(new RegExp(`\\b${overdueRows} student`));
+  await page.screenshot({ path: `${EV}/C3-tiles-overdue-students.png` });
 });
 
 test('AC4 switching student -> family: issued student challans stay per student, the next cycle is combined', async () => {
