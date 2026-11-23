@@ -195,6 +195,28 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
     },
     {
+      // PR 577 (CU-z94x8e91q0) exam question editor MathEditor: Power via the x² button, the virtual keyboard's power key and ^,
+      // first keypress after a toolbar/keycap click, Fraction / Square root / Brackets, save + reopen + preview. Chromium and Firefox.
+      // Self-seeding throwaway campus. Local stack only, serial.
+      name: 'math-editor',
+      testDir: './tests/math-editor',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 8 * 60_000,
+      use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
+    },
+    {
+      name: 'math-editor-firefox',
+      testDir: './tests/math-editor',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 8 * 60_000,
+      // Firefox has no clipboard-read/-write permissions; the global grant would fail newContext.
+      // serviceWorkers: 'block': under Playwright's Firefox the web app's service worker fails its cross-origin fetch of MathLive
+      // (esm.run / jsdelivr: "NetworkError", CORS status null), so the math field never loads. Chromium runs with the worker.
+      use: { ...devices['Desktop Firefox'], timezoneId: 'Asia/Karachi', permissions: [], serviceWorkers: 'block' },
+    },
+    {
       // PR 576 (CU-z94x8eee57) school-app logout must revoke this client's tokens and show the login form.
       // Self-seeding throwaway campus owners; live tokens, no mocks. Local stack only, serial.
       name: 'auth',
