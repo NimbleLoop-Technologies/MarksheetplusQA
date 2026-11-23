@@ -217,6 +217,28 @@ export default defineConfig({
       use: { ...devices['Desktop Firefox'], timezoneId: 'Asia/Karachi', permissions: [], serviceWorkers: 'block' },
     },
     {
+      // PR 579 (CU-z94x8e8qw2) exam paper part drawer: a missing part name and missing/invalid marks each get their own message
+      // under their own field, on Add part and Edit part. Self-seeding throwaway campus. Local stack only, serial.
+      name: 'exam-papers',
+      testDir: './tests/exam-papers',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 6 * 60_000,
+      use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
+    },
+    {
+      // PR 578 (CU-z94x8eefv5, CU-z94x8eeg1z) Fee Payment: a part-paid overdue row shows Partly paid + Overdue and answers both filters;
+      // a per-student school titles the first tile "Students with dues" and counts students. Two self-seeding campuses
+      // (student and family mode) and the Worker scheduler. Local stack only, serial.
+      name: 'fee-dues',
+      testDir: './tests/fee-dues',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 14 * 60_000,
+      expect: { timeout: 15_000 },
+      use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
+    },
+    {
       // PR 580 (CU-z94x8e8quc) ordinal class labels keep a lowercase suffix ("9th - 9"): the Create paper Class dropdown (AC)
       // and a survey of every school-app screen that shows a class label, with ordinal and Play Group classes. Local stack only.
       name: 'class-labels',
