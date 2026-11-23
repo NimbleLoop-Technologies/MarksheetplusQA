@@ -239,6 +239,16 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
     },
     {
+      // PR 580 (CU-z94x8e8quc) ordinal class labels keep a lowercase suffix ("9th - 9"): the Create paper Class dropdown (AC)
+      // and a survey of every school-app screen that shows a class label, with ordinal and Play Group classes. Local stack only.
+      name: 'class-labels',
+      testDir: './tests/class-labels',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 6 * 60_000,
+      use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
+    },
+    {
       // PR 576 (CU-z94x8eee57) school-app logout must revoke this client's tokens and show the login form.
       // Self-seeding throwaway campus owners; live tokens, no mocks. Local stack only, serial.
       name: 'auth',
