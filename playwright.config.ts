@@ -217,6 +217,16 @@ export default defineConfig({
       use: { ...devices['Desktop Firefox'], timezoneId: 'Asia/Karachi', permissions: [], serviceWorkers: 'block' },
     },
     {
+      // PR 579 (CU-z94x8e8qw2) exam paper part drawer: a missing part name and missing/invalid marks each get their own message
+      // under their own field, on Add part and Edit part. Self-seeding throwaway campus. Local stack only, serial.
+      name: 'exam-papers',
+      testDir: './tests/exam-papers',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 6 * 60_000,
+      use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
+    },
+    {
       // PR 576 (CU-z94x8eee57) school-app logout must revoke this client's tokens and show the login form.
       // Self-seeding throwaway campus owners; live tokens, no mocks. Local stack only, serial.
       name: 'auth',
