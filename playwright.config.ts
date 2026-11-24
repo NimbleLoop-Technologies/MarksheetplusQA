@@ -227,6 +227,25 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
     },
     {
+      // IMP-0: Core/Import normalisers through tools/imp0-probe (no browser, no stack data).
+      name: 'import-normalisers',
+      testDir: './tests/import',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 10 * 60_000,
+    },
+    {
+      // PR 573 DEMO-1 (CU-z94x8eebc9) sample-campus guards + IMP-0 (CU-z94x8eebcc) import normalisers. Self-seeding
+      // throwaway owners; flips Mongo tenants.IsSample on its own campuses and waits out the 1-minute policy cache.
+      // Local stack only (Mongo, Postgres, worker log), serial.
+      name: 'sample-campus',
+      testDir: './tests/sample-campus',
+      fullyParallel: false,
+      retries: 0,
+      timeout: 15 * 60_000,
+      use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
+    },
+    {
       name: 'family-setup',
 
       testDir: './fixtures',
