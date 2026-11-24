@@ -48,6 +48,12 @@ const outbox = async (tenantId: string, eventTypes: string[]) =>
   Number((await sql(`select count(*) from "OutboxMessages" where "TenantId" = ${q(tenantId)} and "EventType" in (${eventTypes.map(q).join(',')})`))[0][0]);
 const familyDb = async (statement: string) => sql(statement, 'mp-familyapp-db');
 
+// The back-office operator comes from QA_BACKOFFICE_EMAIL / QA_BACKOFFICE_PASSWORD (ci/run-regression.sh exports them).
+// A stack env without them (PR 573 cycle 3 wrapper) still runs every guard that needs no operator; AC8 and the
+// B1 queue/approve checks skip with this reason instead of failing the whole file in beforeAll.
+const OPS_AVAILABLE = Boolean(process.env.QA_BACKOFFICE_EMAIL && process.env.QA_BACKOFFICE_PASSWORD);
+const OPS_MISSING = 'back-office operator credentials (QA_BACKOFFICE_EMAIL/PASSWORD) are not in this stack env';
+
 test.beforeAll(async () => {
   test.setTimeout(10 * 60_000);
   A = await newCampusOwner('qa573a');
@@ -56,9 +62,13 @@ test.beforeAll(async () => {
   N = await addCampus(A, 'Noplan');
   B = await newCampusOwner('qa573b');
   S2 = B.tenantId;
-  ops = await BackOffice.signIn();
   subS2 = await quotaDb.subscriptionId(S2);
-  await ops.activate(subS2);
+  if (OPS_AVAILABLE) {
+    ops = await BackOffice.signIn();
+    await ops.activate(subS2);
+  } else {
+    console.log(`[ENV] ${OPS_MISSING}: S2 stays on its signup trial; AC8 and the B1 back-office checks are skipped`);
+  }
 
   console.log('[DB SETUP] A/S and A/N: delete the signup subscription (a sample school has none; N is the real no-plan control)');
   await deleteSubscriptionOf(S);
@@ -67,12 +77,14 @@ test.beforeAll(async () => {
   await flagSample(R, 'unset');
 
   // Back-office baseline with S2 still a real, active customer.
-  const detail = await ops.customerDetail(subS2);
-  const planId = detail.planId ?? detail.plan?.id;
-  const plans = await (await ops.http.get(ops.url('plans'))).json();
-  const plan = plans.find((p: any) => p.id === planId) ?? plans.find((p: any) => p.name === (detail.planName ?? detail.plan));
-  before = { dashboard: await dashboard(), customersB: (await customersMatching(B.email)).totalCount, planActive: await planActiveCount(plan.id), planId: plan.id, planPrice: plan.price };
-  console.log(`[baseline] dashboard=${JSON.stringify({ ...before.dashboard, recentActivity: undefined })} customersB=${before.customersB} planActive=${before.planActive} price=${before.planPrice}`);
+  if (OPS_AVAILABLE) {
+    const detail = await ops.customerDetail(subS2);
+    const planId = detail.planId ?? detail.plan?.id;
+    const plans = await (await ops.http.get(ops.url('plans'))).json();
+    const plan = plans.find((p: any) => p.id === planId) ?? plans.find((p: any) => p.name === (detail.planName ?? detail.plan));
+    before = { dashboard: await dashboard(), customersB: (await customersMatching(B.email)).totalCount, planActive: await planActiveCount(plan.id), planId: plan.id, planPrice: plan.price };
+    console.log(`[baseline] dashboard=${JSON.stringify({ ...before.dashboard, recentActivity: undefined })} customersB=${before.customersB} planActive=${before.planActive} price=${before.planPrice}`);
+  }
 
   console.log('[DB SETUP] S and S2: IsSample = true (the DEMO-1 ops step)');
   await flagSample(S);
@@ -154,6 +166,7 @@ test('AC7: a sample never shows WhatsApp quota (status and summary are empty eve
 });
 
 test('AC8: the sample S2 leaves back-office customers, trial/active counts, MRR and plan counts', async () => {
+  test.skip(!OPS_AVAILABLE, OPS_MISSING);
   const after = await dashboard();
   expect(after.totalCustomers).toBe(before.dashboard.totalCustomers - 1);
   expect(after.activeCustomers).toBe(before.dashboard.activeCustomers - 1);
@@ -202,6 +215,23 @@ test('AC4: parent invite, resend and regenerate are refused (409, friendly messa
   expect(await mongo(`print(db.studentfamilylinkinvites.countDocuments({ $or: [{ TenantId: ${JSON.stringify(S2)} }, { StudentId: ${JSON.stringify(s2Student.id)} }] }))`)).toBe('0');
   const waInvites = await mongo(`print(db.scheduledwhatsappmessages.countDocuments({ TenantId: ${JSON.stringify(S2)}, Kind: { $in: [${WA_KIND.StaffInvite}, ${WA_KIND.ParentLinkInvite}] }, Status: { $ne: ${WA_STATUS.Skipped} } }))`);
   expect(waInvites).toBe('0');
+});
+
+test('S4 (cycle 3): the copy-only parent code path (sendWhatsApp: false) and explicit recipients are refused too — 409, never 5xx, nothing created', async () => {
+  for (const [action, data] of [
+    ['invite', { sendWhatsApp: false }], ['invite', { sendWhatsApp: true, recipient: 'father' }], ['resend', { sendWhatsApp: false }], ['regenerate', { sendWhatsApp: false }],
+  ] as const) {
+    const res = await B.api.post(`students/${s2Student.id}/parent-family/${action}`, { data });
+    const text = await res.text();
+    expect(res.status(), `${action} ${JSON.stringify(data)}: ${text}`).toBe(409);
+    expect(text).toContain(INVITES_OFF);
+  }
+  expect(await mongo(`print(db.studentfamilylinkinvites.countDocuments({ $or: [{ TenantId: ${JSON.stringify(S2)} }, { StudentId: ${JSON.stringify(s2Student.id)} }] }))`)).toBe('0');
+  // Staff invite with an explicit body is the same 400 refusal, not a 5xx.
+  const staffRes = await B.api.post(`staff/${s2StaffId}/app-access/invite`, { data: { sendWhatsApp: false } });
+  const staffText = await staffRes.text();
+  expect(staffRes.status(), staffText).toBe(400);
+  expect(staffText).toContain(INVITES_OFF);
 });
 
 test('AC5: a sample student stages no learner provisioning or snapshot event and no family-plane row, even after the backfill sweep', async () => {
@@ -309,7 +339,17 @@ test('B2 + sweep: a sample\'s subscription details have no plan or bank; AuthApp
   }
 });
 
+test('AC7 / B1 (no operator needed): a sample\'s POST subscription/quota/requests is refused 400 with the quota-off message, and no request row is written', async () => {
+  // Runs on every stack. The full B1 test below also checks the back-office queue, approve 409 and the real-campus control.
+  const res = await B.api.post('subscription/quota/requests', { data: { packageId: '000000000000000000000000' } });
+  const body = await res.text();
+  expect(res.status(), body).toBe(400);
+  expect(body).toContain(QUOTA_OFF);
+  expect(await mongo(`print(db.quotatopuprequests.countDocuments({ TenantId: ${JSON.stringify(S2)} }))`)).toBe('0');
+});
+
 test('AC7 / B1: a sample cannot request a paid WhatsApp top-up (400); planted requests are left out of the back-office queue and approve returns 409; a real campus can still request', async () => {
+  test.skip(!OPS_AVAILABLE, OPS_MISSING);
   const pkg = await ops.newPackage(10, 10, 30);
   let plantedId: string | undefined;
   let C: CampusOwner | undefined;
@@ -344,7 +384,8 @@ test('AC7 / B1: a sample cannot request a paid WhatsApp top-up (400); planted re
     const real = await C.api.post('subscription/quota/requests', { data: { packageId: pkg.id } });
     const realBody = await real.text();
     expect(real.status(), realBody).toBe(201);
-    const realQueued = (await ops.requests('Requested')).filter((r) => r.tenantId === C.tenantId);
+    const realTenant = C.tenantId;
+    const realQueued = (await ops.requests('Requested')).filter((r) => r.tenantId === realTenant);
     expect(realQueued).toHaveLength(1);
     await ops.reject(realQueued[0].id, 'QA573 C2 control cleanup');
   } finally {
