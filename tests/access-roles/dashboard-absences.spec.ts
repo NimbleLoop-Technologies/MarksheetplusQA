@@ -570,7 +570,7 @@ test.describe('PR 564 dashboard absentee leak fix (CU-z94x8ee9rn)', () => {
       { path: 'attendance-register/today', params: { sectionId: sec.sectionId, date: today } },
       { path: 'students' },
     ];
-    const out = [];
+    const out: Array<Record<string, unknown>> = [];
     const leaked: typeof out = [];
     const names = expectedActiveAbsentNames(kids);
     for (const p of paths) {

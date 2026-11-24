@@ -346,13 +346,15 @@ has_feature() { # has_feature <project>
 		class-labels) grep -rqsF "ORDINAL_SUFFIX" "$SRC" --include=*.cs ;;
 		# PR 581 (one-off type radio + spaced action buttons, CU-z94x8eeerp).
 		pr581-one-off) grep -rqsF 'Layout="RadioGroupLayout.Inline"' "$SRC/MarksheetPlus.FeeManagement/StaffPayroll/PayrollRowAbsencePanel.razor" ;;
+		# PR 582 (B/F column removed + kindergarten class label, CU-z94x8ea2ny / CU-z94x8e8wb2).
+		pr582) grep -rqsF 'string.Equals(gradeName?.Trim( ), "K", StringComparison.OrdinalIgnoreCase)' "$SRC" --include=*.cs ;;
 		*) return 0 ;;
 	esac
 }
 if [[ "$QA_CI_SUITES" == auto ]]; then
 	SUITES=()
 	# challan-name waits on the 1-minute fee scheduler (~12 min per file) and must run at --workers=1.
-	for p in setup anonymous authenticated shell-notes whatsapp-quota whatsapp-receipts challan-name attendance-backdating payroll pr581-one-off ui-migration family-fees bookshop family-exams access-roles math-editor math-editor-firefox auth fee-dues exam-papers class-labels family-setup family; do
+	for p in setup anonymous authenticated shell-notes whatsapp-quota whatsapp-receipts challan-name attendance-backdating payroll pr581-one-off pr582 ui-migration family-fees bookshop family-exams access-roles math-editor math-editor-firefox auth fee-dues exam-papers class-labels family-setup family; do
 		if has_feature "$p"; then SUITES+=("$p"); else warn "skipping project $p: this MarksheetPlus checkout does not contain its feature yet"; fi
 	done
 else
