@@ -263,6 +263,18 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
     },
     {
+      // PR 582 (CU-z94x8ea2ny / CU-z94x8e8wb2): month attendance register has no B/F column
+      // (screen, CSV, Print, PDF); dashboard absentee popover uses ToClassSectionLabel so
+      // kindergarten is "Play Group (A)" not "Play Group-K (A)". Self-seeding throwaway campus.
+      // Local stack only, serial.
+      name: 'pr582',
+      testDir: './tests/pr582',
+      retries: 0,
+      fullyParallel: false,
+      timeout: 8 * 60_000,
+      use: { ...devices['Desktop Chrome'], timezoneId: 'Asia/Karachi' },
+    },
+    {
       // PR 576 (CU-z94x8eee57) school-app logout must revoke this client's tokens and show the login form.
       // Self-seeding throwaway campus owners; live tokens, no mocks. Local stack only, serial.
       name: 'auth',
